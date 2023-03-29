@@ -176,8 +176,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
         AllocatedNum::alloc(
           cs.namespace(|| {
             format!(
-              "
-          {i}"
+              "z_U_start{i}"
             )
           }),
           || Ok(self.inputs.get()?.z_U_start[i]),
@@ -189,8 +188,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
         AllocatedNum::alloc(
           cs.namespace(|| {
             format!(
-              "
-          {i}"
+              "z_U_end{i}"
             )
           }),
           || Ok(self.inputs.get()?.z_U_end[i]),
@@ -203,8 +201,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
         AllocatedNum::alloc(
           cs.namespace(|| {
             format!(
-              "
-          {i}"
+              "z_R_start{i}"
             )
           }),
           || Ok(self.inputs.get()?.z_R_start[i]),
@@ -217,8 +214,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
         AllocatedNum::alloc(
           cs.namespace(|| {
             format!(
-              "
-          {i}"
+              "z_R_end{i}"
             )
           }),
           || Ok(self.inputs.get()?.z_R_end[i]),
@@ -351,7 +347,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     // Check that u.x[0] = Hash(params, U, i, z_U_start, z_U_end)
     let mut ro = G::ROCircuit::new(
       self.ro_consts.clone(),
-      NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity,
+      NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1,
     );
     ro.absorb(params.clone());
     ro.absorb(i_start_U.clone());
@@ -364,8 +360,8 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     }
     U.absorb_in_ro(cs.namespace(|| "absorb U"), &mut ro)?;
 
-    let hash_bits = ro.squeeze(cs.namespace(|| "Input hash"), NUM_HASH_BITS)?;
-    let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash"), hash_bits)?;
+    let hash_bits = ro.squeeze(cs.namespace(|| "Input hash first"), NUM_HASH_BITS)?;
+    let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
     let check_pass_u = alloc_num_equals(
       cs.namespace(|| "check consistency of u.X[0] with H(params, U, i, z_u_start, z_u_end)"),
       &u.X0,
@@ -386,7 +382,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     // Check that r.x[0] = Hash(params, R, i, z_R_start, z_R_end)
     ro = G::ROCircuit::new(
       self.ro_consts.clone(),
-      NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity,
+      NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1,
     );
     ro.absorb(params.clone());
     ro.absorb(i_start_R);
@@ -399,8 +395,8 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     }
     R.absorb_in_ro(cs.namespace(|| "absorb R"), &mut ro)?;
 
-    let hash_bits = ro.squeeze(cs.namespace(|| "Input hash"), NUM_HASH_BITS)?;
-    let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash"), hash_bits)?;
+    let hash_bits = ro.squeeze(cs.namespace(|| "Input hash second"), NUM_HASH_BITS)?;
+    let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash second"), hash_bits)?;
     let check_pass_r = alloc_num_equals(
       cs.namespace(|| "check consistency of r.X[0] with H(params, R, i, z_r_start, z_r_end)"),
       &r.X0,
@@ -409,7 +405,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
 
     // Run NIFS Verifier
     let R_fold = R.fold_with_r1cs(
-      cs.namespace(|| "compute fold of U and u"),
+      cs.namespace(|| "compute fold of R and r"),
       params.clone(),
       r,
       T_r,
@@ -437,7 +433,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
 
     // Run NIFS Verifier
     let U_R_fold = U_fold.fold_with_relaxed_r1cs(
-      cs.namespace(|| "compute fold of U and u"),
+      cs.namespace(|| "compute fold of U and R"),
       params,
       R_fold,
       T_R_U,
@@ -574,7 +570,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
 
     // In the base case our output is in the z_R_end field and in our normal case it's in  z_R_start
     let z_output = conditionally_select_vec(
-      cs.namespace(|| "select input to F"),
+      cs.namespace(|| "select output of F"),
       &z_R_start,
       &z_R_end,
       &Boolean::from(is_base_case),
@@ -611,7 +607,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
     );
 
     // Compute the new hash H(params, Unew, i_u_start, z_U_start, z_R_end)
-    let mut ro = G::ROCircuit::new(self.ro_consts, NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity);
+    let mut ro = G::ROCircuit::new(self.ro_consts, NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1);
     ro.absorb(params);
     ro.absorb(i_start_U.clone());
     ro.absorb(i_end_R.clone());

@@ -524,3 +524,94 @@ where
     })
   }
 }
+
+
+mod tests {
+    use super::*;
+    type G1 = pasta_curves::pallas::Point;
+    type G2 = pasta_curves::vesta::Point;
+    use crate::{
+        traits::circuit::TrivialTestCircuit
+    };
+    use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
+    use ff::PrimeField;
+    use core::marker::PhantomData;
+
+  
+    #[derive(Clone, Debug, Default)]
+    struct CubicCircuit<F: PrimeField> {
+      _p: PhantomData<F>,
+    }
+  
+    impl<F> StepCircuit<F> for CubicCircuit<F>
+    where
+      F: PrimeField,
+    {
+      fn arity(&self) -> usize {
+        1
+      }
+  
+      fn synthesize<CS: ConstraintSystem<F>>(
+        &self,
+        cs: &mut CS,
+        z: &[AllocatedNum<F>],
+      ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
+        // Consider a cubic equation: `x^3 + x + 5 = y`, where `x` and `y` are respectively the input and output.
+        let x = &z[0];
+        let x_sq = x.square(cs.namespace(|| "x_sq"))?;
+        let x_cu = x_sq.mul(cs.namespace(|| "x_cu"), x)?;
+        let y = AllocatedNum::alloc(cs.namespace(|| "y"), || {
+          Ok(x_cu.get_value().unwrap() + x.get_value().unwrap() + F::from(5u64))
+        })?;
+  
+        cs.enforce(
+          || "y = x^3 + x + 5",
+          |lc| {
+            lc + x_cu.get_variable()
+              + x.get_variable()
+              + CS::one()
+              + CS::one()
+              + CS::one()
+              + CS::one()
+              + CS::one()
+          },
+          |lc| lc + CS::one(),
+          |lc| lc + y.get_variable(),
+        );
+  
+        Ok(vec![y])
+      }
+  
+      fn output(&self, z: &[F]) -> Vec<F> {
+        vec![z[0] * z[0] * z[0] + z[0] + F::from(5u64)]
+      }
+    }
+
+    #[test]
+    fn test_parallel_ivc_base() {
+      // produce public parameters
+      let pp = PublicParams::<
+        G1,
+        G2,
+        TrivialTestCircuit<<G1 as Group>::Scalar>,
+        CubicCircuit<<G2 as Group>::Scalar>,
+      >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
+    
+      let num_steps = 1;
+    
+      // produce a recursive SNARK
+      let res = NovaTreeNode::new(
+        &pp,
+        TrivialTestCircuit::default(),
+        CubicCircuit::default(),
+        0,
+        vec![<G1 as Group>::Scalar::one()],
+        vec![<G1 as Group>::Scalar::one()],
+        vec![<G2 as Group>::Scalar::one()],
+        vec![<G2 as Group>::Scalar::from(5u64)],
+      );
+      assert!(res.is_ok());
+      let recursive_snark = res.unwrap();
+
+    }
+}
