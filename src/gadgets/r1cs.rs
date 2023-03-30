@@ -60,6 +60,11 @@ impl<G: Group> AllocatedR1CSInstance<G> {
     ro.absorb(self.W.is_infinity.clone());
     ro.absorb(self.X0.clone());
     ro.absorb(self.X1.clone());
+    println!("absorbed: {:?}", self.W.x.clone().get_value());
+    println!("absorbed: {:?}", self.W.y.clone().get_value());
+    println!("absorbed: {:?}", self.W.is_infinity.clone().get_value());
+    println!("absorbed: {:?}", self.X0.clone().get_value());
+    println!("absorbed: {:?}", self.X1.clone().get_value());
   }
 }
 
@@ -204,6 +209,13 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     ro.absorb(self.E.y.clone());
     ro.absorb(self.E.is_infinity.clone());
     ro.absorb(self.u.clone());
+    println!("absorbed: {:?}", self.W.x.clone().get_value());
+    println!("absorbed: {:?}", self.W.y.clone().get_value());
+    println!("absorbed: {:?}", self.W.is_infinity.clone().get_value());
+    println!("absorbed: {:?}", self.E.x.clone().get_value());
+    println!("absorbed: {:?}", self.E.y.clone().get_value());
+    println!("absorbed: {:?}", self.E.is_infinity.clone().get_value());
+    println!("absorbed: {:?}", self.u.clone().get_value());
 
     // Analyze X0 as limbs
     let X0_bn = self
@@ -218,6 +230,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
 
     // absorb each of the limbs of X[0]
     for limb in X0_bn.into_iter() {
+      println!("absorbed: {:?}", limb.clone().get_value());
       ro.absorb(limb);
     }
 
@@ -234,6 +247,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
 
     // absorb each of the limbs of X[1]
     for limb in X1_bn.into_iter() {
+      println!("absorbed: {:?}", limb.clone().get_value());
       ro.absorb(limb);
     }
 
@@ -377,14 +391,17 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
       .add(cs.namespace(|| "self.E + r * T"), &rT_plus_r_squared_E_2)?;
 
     // u_fold = u_r + r
+    let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u times r"), || {
+      Ok(*self.u.get_value().get()? * r.get_value().get()?)
+    })?;
     let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
-      Ok(*self.u.get_value().get()? + r.get_value().get()?)
+      Ok(*self.u.get_value().get()? + u_u_r.get_value().get()?)
     })?;
     cs.enforce(
       || "Check u_fold",
       |lc| lc,
       |lc| lc,
-      |lc| lc + u_fold.get_variable() - self.u.get_variable() - r.get_variable(),
+      |lc| lc + u_fold.get_variable() - self.u.get_variable() - u_u_r.get_variable(),
     );
 
     // Fold the IO:

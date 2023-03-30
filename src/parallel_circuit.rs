@@ -6,6 +6,7 @@
 //! H(params = H(shape, ck), i, z0, zi, U). Each circuit folds the last invocation of
 //! the other into the running instance
 
+#![allow(unused)]
 use crate::{
   circuit::NovaAugmentedCircuitParams,
   constants::{NUM_FE_WITHOUT_IO_FOR_CRHF, NUM_HASH_BITS},
@@ -244,7 +245,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     let R: AllocatedRelaxedR1CSInstance<G> = AllocatedRelaxedR1CSInstance::alloc(
       cs.namespace(|| "Allocate R"),
       self.inputs.get().map_or(None, |inputs| {
-        inputs.R.get().map_or(None, |U| Some(U.clone()))
+        inputs.R.get().map_or(None, |R| Some(R.clone()))
       }),
       self.params.limb_width,
       self.params.n_limbs,
@@ -254,7 +255,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     let r = AllocatedR1CSInstance::alloc(
       cs.namespace(|| "allocate instance r to fold"),
       self.inputs.get().map_or(None, |inputs| {
-        inputs.u.get().map_or(None, |u| Some(u.clone()))
+        inputs.r.get().map_or(None, |r| Some(r.clone()))
       }),
     )?;
 
@@ -344,7 +345,8 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     T_R_U: AllocatedPoint<G>,
     arity: usize,
   ) -> Result<(AllocatedRelaxedR1CSInstance<G>, AllocatedBit), SynthesisError> {
-    // Check that u.x[0] = Hash(params, U, i, z_U_start, z_U_end)
+    // Check that u.x[0] = Hash(params, i_start_U, i_end_U z_U_start, z_U_end, U)
+    println!("__________________ checked hash computation _____________________");
     let mut ro = G::ROCircuit::new(
       self.ro_consts.clone(),
       NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1,
@@ -352,16 +354,25 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
     ro.absorb(params.clone());
     ro.absorb(i_start_U.clone());
     ro.absorb(i_end_U.clone());
+    println!("absorbed: {:?}", params.clone().get_value());
+    println!("absorbed: {:?}", i_start_U.clone().get_value());
+    println!("absorbed: {:?}", i_end_U.clone().get_value());
+
     for e in z_U_start.clone() {
+      println!("absorbed: {:?}", e.clone().get_value());
       ro.absorb(e);
     }
     for e in z_U_end {
+      println!("absorbed: {:?}", e.clone().get_value());
       ro.absorb(e);
     }
     U.absorb_in_ro(cs.namespace(|| "absorb U"), &mut ro)?;
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash first"), NUM_HASH_BITS)?;
     let hash_u = le_bits_to_num(cs.namespace(|| "bits to hash first"), hash_bits)?;
+    println!("__________________ checked hash computation end _____________________");
+    println!("Hash check {:?} == {:?}", hash_u.clone().get_value(), u.X0.clone().get_value());
+
     let check_pass_u = alloc_num_equals(
       cs.namespace(|| "check consistency of u.X[0] with H(params, U, i, z_u_start, z_u_end)"),
       &u.X0,
@@ -379,7 +390,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
       self.params.n_limbs,
     )?;
 
-    // Check that r.x[0] = Hash(params, R, i, z_R_start, z_R_end)
+    // Check that r.x[0] = Hash(params, i_start_R, i_end_R, z_R_start, z_R_end, R)
     ro = G::ROCircuit::new(
       self.ro_consts.clone(),
       NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1,
@@ -397,6 +408,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
 
     let hash_bits = ro.squeeze(cs.namespace(|| "Input hash second"), NUM_HASH_BITS)?;
     let hash_r = le_bits_to_num(cs.namespace(|| "bits to hash second"), hash_bits)?;
+    println!("Hash check {:?} == {:?}", hash_r.clone().get_value(), r.X0.clone().get_value());
     let check_pass_r = alloc_num_equals(
       cs.namespace(|| "check consistency of r.X[0] with H(params, R, i, z_r_start, z_r_end)"),
       &r.X0,
@@ -413,23 +425,6 @@ impl<G: Group, SC: StepCircuit<G::Base>> NovaAugmentedParallelCircuit<G, SC> {
       self.params.limb_width,
       self.params.n_limbs,
     )?;
-
-    // Finally we hash z_U_start with z_R_end and use that to fold the relaxed instances resulting from the fold
-    // of the two running instances
-    ro = G::ROCircuit::new(
-      self.ro_consts.clone(),
-      NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity,
-    );
-    ro.absorb(params.clone());
-    ro.absorb(i_start_U);
-    for e in z_U_start {
-      ro.absorb(e);
-    }
-    for e in z_R_end {
-      ro.absorb(e);
-    }
-    ro.absorb(hash_r);
-    ro.absorb(hash_u);
 
     // Run NIFS Verifier
     let U_R_fold = U_fold.fold_with_relaxed_r1cs(
@@ -459,6 +454,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
     self,
     cs: &mut CS,
   ) -> Result<(), SynthesisError> {
+    println!("");
     let arity = self.step_circuit.arity();
 
     // Allocate all witnesses
@@ -518,7 +514,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
       U,
       u.clone(),
       R,
-      r,
+      r.clone(),
       T_u,
       T_r,
       T_R_U,
@@ -571,8 +567,8 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
     // In the base case our output is in the z_R_end field and in our normal case it's in  z_R_start
     let z_output = conditionally_select_vec(
       cs.namespace(|| "select output of F"),
-      &z_R_start,
       &z_R_end,
+      &z_R_start,
       &Boolean::from(is_base_case),
     )?;
 
@@ -598,7 +594,7 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
       )?;
     }
 
-    // TODO - I really don't know how this R1CS lib works and this is a guess
+    // // TODO - I really don't know how this R1CS lib works and this is a guess
     cs.enforce(
       || "check outputEqual = true",
       |lc| lc,
@@ -606,25 +602,35 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
       |lc| lc + outputEqual.get_variable() - CS::one(),
     );
 
+    println!("__________________ exported hash computation _____________________");
     // Compute the new hash H(params, Unew, i_u_start, z_U_start, z_R_end)
     let mut ro = G::ROCircuit::new(self.ro_consts, NUM_FE_WITHOUT_IO_FOR_CRHF + 2 * arity + 1);
+    println!("absorbed: {:?}", params.clone().get_value());
     ro.absorb(params);
     ro.absorb(i_start_U.clone());
+    println!("absorbed: {:?}", i_start_U.clone().get_value());
+    println!("absorbed: {:?}", i_end_R.clone().get_value());
     ro.absorb(i_end_R.clone());
     for e in z_input {
+      println!("absorbed: {:?}", e.clone().get_value());
       ro.absorb(e);
     }
     for e in z_output {
+      println!("absorbed: {:?}", e.clone().get_value());
       ro.absorb(e);
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
+    
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
 
     // Outputs the computed hash and u.X[1] that corresponds to the hash of the other circuit
-    u.X1
-      .inputize(cs.namespace(|| "Output unmodified hash of the other circuit"))?;
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
+    u.X1.inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
+
+    println!("Output folded hash {:?}", hash.clone().get_value());
+    println!("_______________________________________");
 
     Ok(())
   }

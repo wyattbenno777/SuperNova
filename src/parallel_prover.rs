@@ -222,8 +222,8 @@ where
       NovaAugmentedParallelCircuitInputs::new(
         pp.r1cs_shape_secondary.get_digest(),
         G1::Scalar::from(i.try_into().unwrap()),
-        G1::Scalar::from((i + 1).try_into().unwrap()),
         G1::Scalar::from((i).try_into().unwrap()),
+        G1::Scalar::from((i + 1).try_into().unwrap()),
         G1::Scalar::from((i + 1).try_into().unwrap()),
         z_start_primary.clone(),
         z_start_primary.clone(),
@@ -256,8 +256,8 @@ where
       NovaAugmentedParallelCircuitInputs::new(
         pp.r1cs_shape_primary.get_digest(),
         G2::Scalar::from(i),
-        G2::Scalar::from(i + 1),
         G2::Scalar::from(i),
+        G2::Scalar::from(i + 1),
         G2::Scalar::from(i + 1),
         z_start_secondary.clone(),
         z_start_secondary.clone(),
@@ -472,7 +472,7 @@ where
       );
 
     let circuit_secondary: NovaAugmentedParallelCircuit<G1, C2> = NovaAugmentedParallelCircuit::new(
-      pp.augmented_circuit_params_primary.clone(),
+      pp.augmented_circuit_params_secondary.clone(),
       Some(inputs_secondary),
       c_secondary.clone(),
       pp.ro_consts_circuit_secondary.clone(),
@@ -614,4 +614,51 @@ mod tests {
       let recursive_snark = res.unwrap();
 
     }
+
+    #[test]
+    fn test_parallel_combine_two_ivc() {
+        // produce public parameters
+        let pp = PublicParams::<
+          G1,
+          G2,
+          TrivialTestCircuit<<G1 as Group>::Scalar>,
+          CubicCircuit<<G2 as Group>::Scalar>,
+        >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
+      
+        // produce a recursive SNARK
+        let res_0 = NovaTreeNode::new(
+          &pp,
+          TrivialTestCircuit::default(),
+          CubicCircuit::default(),
+          0,
+          vec![<G1 as Group>::Scalar::one()],
+          vec![<G1 as Group>::Scalar::one()],
+          vec![<G2 as Group>::Scalar::zero()],
+          vec![<G2 as Group>::Scalar::from(5u64)],
+        );
+        assert!(res_0.is_ok());
+        let recursive_snark_0 = res_0.unwrap();
+
+        let res_1 = NovaTreeNode::new(
+            &pp,
+            TrivialTestCircuit::default(),
+            CubicCircuit::default(),
+            2,
+            vec![<G1 as Group>::Scalar::one()],
+            vec![<G1 as Group>::Scalar::one()],
+            vec![<G2 as Group>::Scalar::from(135u64)],
+            vec![<G2 as Group>::Scalar::from(2460515u64)],
+          );
+        assert!(res_1.is_ok());
+        let recursive_snark = res_1.unwrap();
+
+        let res_2 = recursive_snark_0.merge(
+            recursive_snark,
+            &pp,
+            &TrivialTestCircuit::default(),
+            &CubicCircuit::default()
+        );
+        assert!(res_2.is_ok());
+  
+      }
 }
