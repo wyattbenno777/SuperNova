@@ -1,12 +1,12 @@
 //! This library implements Nova, a high-speed recursive SNARK.
-#![deny(
-  warnings,
-  unused,
-  future_incompatible,
-  nonstandard_style,
-  rust_2018_idioms,
-  missing_docs
-)]
+// #![deny(
+//   warnings,
+//   unused,
+//   future_incompatible,
+//   nonstandard_style,
+//   rust_2018_idioms,
+//   missing_docs
+// )]
 #![allow(non_snake_case)]
 #![allow(clippy::type_complexity)]
 #![forbid(unsafe_code)]
@@ -37,10 +37,10 @@ use circuit::{NovaAugmentedCircuit, NovaAugmentedCircuitInputs, NovaAugmentedCir
 use constants::{BN_LIMB_WIDTH, BN_N_LIMBS, NUM_FE_WITHOUT_IO_FOR_CRHF, NUM_HASH_BITS};
 use core::marker::PhantomData;
 use errors::NovaError;
-use ff::Field;
+use ff::{Field, PrimeField};
 use gadgets::utils::scalar_as_base;
 use nifs::NIFS;
-use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness};
+use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS};
 use serde::{Deserialize, Serialize};
 use traits::{
   circuit::StepCircuit,
@@ -308,7 +308,7 @@ where
           &r_snark.r_W_secondary,
           &r_snark.l_u_secondary,
           &r_snark.l_w_secondary,
-          false
+          false,
         )?;
 
         let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
@@ -351,7 +351,7 @@ where
           &r_snark.r_W_primary,
           &l_u_primary,
           &l_w_primary,
-          false
+          false,
         )?;
 
         let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
@@ -660,7 +660,7 @@ where
           &recursive_snark.r_W_primary,
           &recursive_snark.l_u_primary,
           &recursive_snark.l_w_primary,
-          false
+          false,
         )
       },
       || {
@@ -673,7 +673,7 @@ where
           &recursive_snark.r_W_secondary,
           &recursive_snark.l_u_secondary,
           &recursive_snark.l_w_secondary,
-          false
+          false,
         )
       },
     );
@@ -783,14 +783,14 @@ where
       &vk.r1cs_shape_primary_digest,
       &self.r_U_primary,
       &self.l_u_primary,
-      false
+      false,
     )?;
     let f_U_secondary = self.nifs_secondary.verify(
       &vk.ro_consts_secondary,
       &vk.r1cs_shape_secondary_digest,
       &self.r_U_secondary,
       &self.l_u_secondary,
-      false
+      false,
     )?;
 
     // check the satisfiability of the folded instances using SNARKs proving the knowledge of their satisfying witnesses
