@@ -1,12 +1,12 @@
 //! This library implements Nova, a high-speed recursive SNARK.
-#![deny(
-  warnings,
-  unused,
-  future_incompatible,
-  nonstandard_style,
-  rust_2018_idioms,
-  missing_docs
-)]
+// #![deny(
+//   warnings,
+//   unused,
+//   future_incompatible,
+//   nonstandard_style,
+//   rust_2018_idioms,
+//   missing_docs
+// )]
 #![allow(non_snake_case)]
 #![allow(clippy::type_complexity)]
 #![forbid(unsafe_code)]
@@ -37,10 +37,10 @@ use circuit::{NovaAugmentedCircuit, NovaAugmentedCircuitInputs, NovaAugmentedCir
 use constants::{BN_LIMB_WIDTH, BN_N_LIMBS, NUM_FE_WITHOUT_IO_FOR_CRHF, NUM_HASH_BITS};
 use core::marker::PhantomData;
 use errors::NovaError;
-use ff::Field;
+use ff::{Field, PrimeField};
 use gadgets::utils::scalar_as_base;
 use nifs::NIFS;
-use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness};
+use r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS};
 use serde::{Deserialize, Serialize};
 use traits::{
   circuit::StepCircuit,

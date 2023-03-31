@@ -30,9 +30,9 @@ use crate::{
   },
   nifs::NIFS,
   parallel_circuit::{NovaAugmentedParallelCircuit, NovaAugmentedParallelCircuitInputs},
-  r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness},
+  r1cs::{R1CSShape, RelaxedR1CSInstance, RelaxedR1CSWitness, R1CS},
   traits::{
-    circuit::StepCircuit,
+    circuit::{StepCircuit, TrivialTestCircuit},
     commitment::{CommitmentEngineTrait, CommitmentTrait},
     snark::RelaxedR1CSSNARKTrait,
     AbsorbInROTrait, Group, ROConstants, ROConstantsCircuit, ROConstantsTrait, ROTrait,
@@ -642,6 +642,52 @@ where
   /// Get current length of current level
   pub fn get_tree_size(&self) -> usize {
     self.nodes.len()
+  }
+}
+
+pub struct FoldInput<G: Group> {
+  witness: Vec<G::Scalar>,
+  r1cs: R1CS<G>,
+  public_inputs: Vec<G::Scalar>,
+  public_outputs: Vec<G::Scalar>,
+}
+
+pub fn par_digest_folds<G1, G2, S1, S2>(
+  pp: PublicParams<G1, G2, S1, S2>,
+  fold_inputs: Vec<FoldInput<G1>>,
+  primary_circuit: S1,
+  secondary_circuit: S2,
+) where
+  G1: Group<Base = <G2 as Group>::Scalar>,
+  G2: Group<Base = <G1 as Group>::Scalar>,
+  S1: StepCircuit<G1::Scalar>,
+  S2: StepCircuit<G2::Scalar>,
+{
+  // produce public parameters
+  let pp =
+    PublicParams::<G1, G2, S1, S2>::setup(primary_circuit.clone(), secondary_circuit.clone());
+
+  // Process parallely all base_level folds.
+  let mut folds: Vec<NovaTreeNode<G1, G2, S1, S2>> = fold_inputs
+    .par_iter()
+    .enumerate()
+    .map(|(i, fold_input)| {
+      NovaTreeNode::new(
+        &pp,
+        primary_circuit.clone(),
+        secondary_circuit.clone(),
+        i as u64,
+        fold_input.public_inputs.clone(),
+        fold_input.public_outputs.clone(),
+        vec![<G2 as Group>::Scalar::zero()],
+        vec![<G2 as Group>::Scalar::zero()],
+      )
+      .unwrap()
+    })
+    .collect();
+
+  while (folds.len() > 1) {
+    //folds.par_iter().chunks(2).map()
   }
 }
 
