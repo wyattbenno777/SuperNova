@@ -39,6 +39,7 @@ use crate::{
   },
   Commitment,
 };
+use ark_std::{end_timer, start_timer};
 use bellperson::{
   gadgets::{
     boolean::{AllocatedBit, Boolean},
@@ -634,6 +635,9 @@ where
     }
   }
 
+  // --------------------------------------------------------------------------------------
+  // --------------------------------------------------------------------------------------
+
   /// Get all nodes from given instance
   pub fn get_nodes(&self) -> Vec<NovaTreeNode<G1, G2, C1, C2>> {
     self.nodes.clone()
@@ -646,49 +650,69 @@ where
 }
 
 pub struct FoldInput<G: Group> {
-  witness: Vec<G::Scalar>,
-  r1cs: R1CS<G>,
-  public_inputs: Vec<G::Scalar>,
-  public_outputs: Vec<G::Scalar>,
+  pub witness: Vec<G::Scalar>,
+  pub public_inputs: Vec<G::Scalar>,
+  pub public_outputs: Vec<G::Scalar>,
 }
 
-pub fn par_digest_folds<G1, G2, S1, S2>(
-  pp: PublicParams<G1, G2, S1, S2>,
-  fold_inputs: Vec<FoldInput<G1>>,
+pub fn par_digest_folds<Z1, Z2, S1, S2>(
+  pp: crate::parallel_prover::PublicParams<Z1, Z2, S1, S2>,
+  fold_inputs: Vec<FoldInput<Z1>>,
   primary_circuit: S1,
   secondary_circuit: S2,
-) where
-  G1: Group<Base = <G2 as Group>::Scalar>,
-  G2: Group<Base = <G1 as Group>::Scalar>,
-  S1: StepCircuit<G1::Scalar>,
-  S2: StepCircuit<G2::Scalar>,
+) -> Result<NovaTreeNode<Z1, Z2, S1, S2>, NovaError>
+where
+  Z1: Group<Base = <Z2 as Group>::Scalar>,
+  Z2: Group<Base = <Z1 as Group>::Scalar>,
+  S1: StepCircuit<Z1::Scalar>,
+  S2: StepCircuit<Z2::Scalar>,
 {
-  // produce public parameters
-  let pp =
-    PublicParams::<G1, G2, S1, S2>::setup(primary_circuit.clone(), secondary_circuit.clone());
-
+  let base_node = start_timer!(|| "base nodes folding time");
   // Process parallely all base_level folds.
-  let mut folds: Vec<NovaTreeNode<G1, G2, S1, S2>> = fold_inputs
-    .par_iter()
+  let mut folds: Vec<NovaTreeNode<Z1, Z2, S1, S2>> = fold_inputs
+    .par_chunks(2)
     .enumerate()
     .map(|(i, fold_input)| {
-      NovaTreeNode::new(
+      let node = NovaTreeNode::new(
         &pp,
         primary_circuit.clone(),
         secondary_circuit.clone(),
-        i as u64,
-        fold_input.public_inputs.clone(),
-        fold_input.public_outputs.clone(),
-        vec![<G2 as Group>::Scalar::zero()],
-        vec![<G2 as Group>::Scalar::zero()],
+        2 * i as u64,
+        fold_input[0].public_inputs.clone(),
+        fold_input[1].public_outputs.clone(),
+        vec![<Z2 as Group>::Scalar::zero()],
+        vec![<Z2 as Group>::Scalar::zero()],
       )
-      .unwrap()
+      .unwrap();
+
+      node
     })
     .collect();
+  end_timer!(base_node);
 
   while (folds.len() > 1) {
-    //folds.par_iter().chunks(2).map()
+    let internal_node = start_timer!(|| "internal node level folding time");
+    folds = folds
+      .par_chunks(2)
+      .map(|item| {
+        let node = match item {
+          // There are 2 nodes in the chunk
+          [vl, vr] => (*vl)
+            .clone()
+            .merge((*vr).clone(), &pp, &primary_circuit, &secondary_circuit)
+            .expect("Merge the left and right should work"),
+          // Just 1 node left, we carry it to the next level
+          [vl] => (*vl).clone(),
+          _ => panic!("Invalid chunk size"),
+        };
+
+        node
+      })
+      .collect();
+    end_timer!(internal_node);
   }
+
+  Ok(folds[0].clone())
 }
 
 mod tests {

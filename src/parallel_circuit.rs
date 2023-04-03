@@ -550,15 +550,20 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
 
     // Check vector equality of the step output and of the start of the R block
     let mut outputEqual = AllocatedBit::alloc(cs.namespace(|| "allocate bit equal"), Some(true))?;
-    for (next, input) in z_next.clone().iter().zip(z_output.clone().iter()) {
+    for (i, (next, input)) in z_next
+      .clone()
+      .iter()
+      .zip(z_output.clone().iter())
+      .enumerate()
+    {
       // We check that each index is equal then and it with the global check
       let entryEqual = alloc_num_equals(
-        cs.namespace(|| "equality check of z_next and z_output"),
+        cs.namespace(|| format!("equality check of z_next and z_output {:?}", i)),
         &next,
         &input,
       )?;
       outputEqual = AllocatedBit::and(
-        cs.namespace(|| "accumulate equality checks"),
+        cs.namespace(|| format!("accumulate equality checks {:?}", i)),
         &outputEqual,
         &entryEqual,
       )?;
@@ -584,13 +589,14 @@ impl<G: Group, SC: StepCircuit<G::Base>> Circuit<<G as Group>::Base>
       ro.absorb(e);
     }
     Unew.absorb_in_ro(cs.namespace(|| "absorb U_new"), &mut ro)?;
-    
+
     let hash_bits = ro.squeeze(cs.namespace(|| "output hash bits"), NUM_HASH_BITS)?;
     let hash = le_bits_to_num(cs.namespace(|| "convert hash to num"), hash_bits)?;
 
     // Outputs the computed hash and u.X[1] that corresponds to the hash of the other circuit
     hash.inputize(cs.namespace(|| "output new hash of this circuit"))?;
-    u.X1.inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
+    u.X1
+      .inputize(cs.namespace(|| "Output unmodified hash of the u circuit"))?;
     // r.X1.inputize(cs.namespace(|| "Output unmodified hash of the r circuit"))?;
 
     Ok(())
