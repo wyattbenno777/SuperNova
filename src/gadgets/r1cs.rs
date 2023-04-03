@@ -60,11 +60,6 @@ impl<G: Group> AllocatedR1CSInstance<G> {
     ro.absorb(self.W.is_infinity.clone());
     ro.absorb(self.X0.clone());
     ro.absorb(self.X1.clone());
-    println!("absorbed: {:?}", self.W.x.clone().get_value());
-    println!("absorbed: {:?}", self.W.y.clone().get_value());
-    println!("absorbed: {:?}", self.W.is_infinity.clone().get_value());
-    println!("absorbed: {:?}", self.X0.clone().get_value());
-    println!("absorbed: {:?}", self.X1.clone().get_value());
   }
 }
 
@@ -209,13 +204,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     ro.absorb(self.E.y.clone());
     ro.absorb(self.E.is_infinity.clone());
     ro.absorb(self.u.clone());
-    println!("absorbed: {:?}", self.W.x.clone().get_value());
-    println!("absorbed: {:?}", self.W.y.clone().get_value());
-    println!("absorbed: {:?}", self.W.is_infinity.clone().get_value());
-    println!("absorbed: {:?}", self.E.x.clone().get_value());
-    println!("absorbed: {:?}", self.E.y.clone().get_value());
-    println!("absorbed: {:?}", self.E.is_infinity.clone().get_value());
-    println!("absorbed: {:?}", self.u.clone().get_value());
 
     // Analyze X0 as limbs
     let X0_bn = self
@@ -230,7 +218,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
 
     // absorb each of the limbs of X[0]
     for limb in X0_bn.into_iter() {
-      println!("absorbed: {:?}", limb.clone().get_value());
       ro.absorb(limb);
     }
 
@@ -247,7 +234,6 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
 
     // absorb each of the limbs of X[1]
     for limb in X1_bn.into_iter() {
-      println!("absorbed: {:?}", limb.clone().get_value());
       ro.absorb(limb);
     }
 
