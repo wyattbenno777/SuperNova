@@ -352,7 +352,7 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     n_limbs: usize,
   ) -> Result<AllocatedRelaxedR1CSInstance<G>, SynthesisError> {
     // Compute r:
-    let mut ro = G::ROCircuit::new(ro_consts, NUM_FE_FOR_RO);
+    let mut ro = G::ROCircuit::new(ro_consts, NUM_FE_FOR_RO + 10);
     ro.absorb(params);
     self.absorb_in_ro(cs.namespace(|| "absorb running instance"), &mut ro)?;
     u.absorb_in_ro(cs.namespace(|| "absorb running instance u"), &mut ro)?;
@@ -371,20 +371,23 @@ impl<G: Group> AllocatedRelaxedR1CSInstance<G> {
     let r_e_2 = u.E.scalar_mul(cs.namespace(|| "r * E_2"), r_bits.clone())?;
     // Todo - there has to be a better way than 2 scalar mul
     let r_squared_e_2 = r_e_2.scalar_mul(cs.namespace(|| "r * r * E_2"), r_bits)?;
-    let rT_plus_r_squared_E_2 = rT.add(cs.namespace(|| "r * r * E_2"), &r_squared_e_2)?;
+    let rT_plus_r_squared_E_2 = rT.add(cs.namespace(|| "rT + r * r * E_2"), &r_squared_e_2)?;
     let E_fold = self
       .E
       .add(cs.namespace(|| "self.E + r * T"), &rT_plus_r_squared_E_2)?;
 
     // u_fold = u_r + r
+    let u_u_r = AllocatedNum::alloc(cs.namespace(|| "u_u times r"), || {
+      Ok(*self.u.get_value().get()? * r.get_value().get()?)
+    })?;
     let u_fold = AllocatedNum::alloc(cs.namespace(|| "u_fold"), || {
-      Ok(*self.u.get_value().get()? + r.get_value().get()?)
+      Ok(*self.u.get_value().get()? + u_u_r.get_value().get()?)
     })?;
     cs.enforce(
       || "Check u_fold",
       |lc| lc,
       |lc| lc,
-      |lc| lc + u_fold.get_variable() - self.u.get_variable() - r.get_variable(),
+      |lc| lc + u_fold.get_variable() - self.u.get_variable() - u_u_r.get_variable(),
     );
 
     // Fold the IO:
