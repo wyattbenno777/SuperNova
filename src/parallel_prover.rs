@@ -45,10 +45,11 @@ use bellperson::{
     num::AllocatedNum,
     Assignment,
   },
-  Circuit, ConstraintSystem, SynthesisError,
+  Circuit, ConstraintSystem, Index, SynthesisError,
 };
 use core::marker::PhantomData;
 use ff::Field;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // TODO - This is replicated from lib but we should actually instead have another file for it and use both here and there
@@ -353,7 +354,7 @@ where
       &self.W_secondary,
       &self.u_secondary,
       &self.w_secondary,
-      false
+      false,
     )?;
     let (nifs_right_secondary, (right_U_secondary, right_W_secondary)) = NIFS::prove(
       &pp.ck_secondary,
@@ -363,7 +364,7 @@ where
       &right.W_secondary,
       &right.u_secondary,
       &right.w_secondary,
-      false
+      false,
     )?;
     let (nifs_secondary, (U_secondary, W_secondary)) = NIFS::prove(
       &pp.ck_secondary,
@@ -373,7 +374,7 @@ where
       &left_W_secondary,
       &right_U_secondary,
       &right_W_secondary,
-      true
+      true,
     )?;
 
     // Next we construct a proof of this folding and of the invocation of F
@@ -425,7 +426,7 @@ where
       &self.W_primary,
       &self.u_primary,
       &self.w_primary,
-      false
+      false,
     )?;
     let (nifs_right_primary, (right_U_primary, right_W_primary)) = NIFS::prove(
       &pp.ck_primary,
@@ -435,7 +436,7 @@ where
       &right.W_primary,
       &right.u_primary,
       &right.w_primary,
-      false
+      false,
     )?;
     let (nifs_primary, (U_primary, W_primary)) = NIFS::prove(
       &pp.ck_primary,
@@ -445,7 +446,7 @@ where
       &left_W_primary,
       &right_U_primary,
       &right_W_primary,
-      true
+      true,
     )?;
 
     // Next we construct a proof of this folding in the secondary curve
@@ -525,140 +526,243 @@ where
   }
 }
 
+/// Structure for parallelization
+#[derive(Debug, Clone)]
+pub struct ParallelSNARK<G1, G2, C1, C2>
+where
+  G1: Group<Base = <G2 as Group>::Scalar>,
+  G2: Group<Base = <G1 as Group>::Scalar>,
+  C1: StepCircuit<G1::Scalar>,
+  C2: StepCircuit<G2::Scalar>,
+{
+  nodes: Vec<NovaTreeNode<G1, G2, C1, C2>>,
+}
+
+/// Implementation for parallelization SNARK
+impl<G1, G2, C1, C2> ParallelSNARK<G1, G2, C1, C2>
+where
+  G1: Group<Base = <G2 as Group>::Scalar>,
+  G2: Group<Base = <G1 as Group>::Scalar>,
+  C1: StepCircuit<G1::Scalar>,
+  C2: StepCircuit<G2::Scalar>,
+{
+  /// Create a new instance of parallel SNARK
+  pub fn new(
+    pp: &PublicParams<G1, G2, C1, C2>,
+    steps: usize,
+    z0_primary: Vec<G1::Scalar>,
+    z0_secondary: Vec<G2::Scalar>,
+    c_primary: C1,
+    c_secondary: C2,
+  ) -> Self {
+    // Tuple's structure is (index, zi_primary, zi_secondary)
+    let mut zi = Vec::<(usize, Vec<G1::Scalar>, Vec<G2::Scalar>)>::new();
+    // First input value of Z0, these steps can't be done in parallel
+    zi.push((0, z0_primary.clone(), z0_secondary.clone()));
+    for i in 1..steps {
+      let (index, prev_primary, prev_secondary) = &zi[i as usize - 1];
+      zi.push((
+        i,
+        c_primary.output(&prev_primary),
+        c_secondary.output(&prev_secondary),
+      ));
+    }
+    // Do calculate node tree in parallel
+    let nodes = zi
+      .par_chunks(2)
+      .map(|item| {
+        match item {
+          // There are 2 nodes
+          [l, r] => NovaTreeNode::new(
+            &pp,
+            c_primary.clone(),
+            c_secondary.clone(),
+            l.0 as u64,
+            l.1.clone(),
+            r.1.clone(),
+            l.2.clone(),
+            r.2.clone(),
+          )
+          .expect("Unable to create base node"),
+          // Just 1 node left
+          [l] => NovaTreeNode::new(
+            &pp,
+            c_primary.clone(),
+            c_secondary.clone(),
+            l.0 as u64,
+            zi[l.0 - 1].1.clone(),
+            l.1.clone(),
+            zi[l.0 - 1].2.clone(),
+            l.2.clone(),
+          )
+          .expect("Unable to create the last base node"),
+          _ => panic!("Unexpected chunk size"),
+        }
+      })
+      .collect();
+    // Create a new parallel prover wit basic leafs
+    Self { nodes }
+  }
+
+  /// Perform the proving in parallel
+  pub fn prove(&mut self, pp: &PublicParams<G1, G2, C1, C2>, c_primary: &C1, c_secondary: &C2) {
+    // Calculate the max height of the tree
+    // ⌈log2(n)⌉ + 1
+    let max_height = ((self.nodes.len() as f64).log2().ceil() + 1f64) as usize;
+
+    // Build up the tree with max given height
+    for level in 0..max_height {
+      // Exist if we on the root of the tree
+      if self.nodes.len() == 1 {
+        break;
+      }
+      // New nodes list will reduce a half each round
+      self.nodes = self
+        .nodes
+        .par_chunks(2)
+        .map(|item| match item {
+          // There are 2 nodes in the chunk
+          [vl, vr] => (*vl)
+            .clone()
+            .merge((*vr).clone(), pp, c_primary, c_secondary)
+            .expect("Merge the left and right should work"),
+          // Just 1 node left, we carry it to the next level
+          [vl] => (*vl).clone(),
+          _ => panic!("Invalid chunk size"),
+        })
+        .collect();
+    }
+  }
+}
 
 mod tests {
-    use super::*;
-    type G1 = pasta_curves::pallas::Point;
-    type G2 = pasta_curves::vesta::Point;
-    use crate::{
-        traits::circuit::TrivialTestCircuit
-    };
-    use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
-    use ff::PrimeField;
-    use core::marker::PhantomData;
+  use super::*;
+  type G1 = pasta_curves::pallas::Point;
+  type G2 = pasta_curves::vesta::Point;
+  use crate::traits::circuit::TrivialTestCircuit;
+  use bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
+  use core::marker::PhantomData;
+  use ff::PrimeField;
 
-  
-    #[derive(Clone, Debug, Default)]
-    struct CubicCircuit<F: PrimeField> {
-      _p: PhantomData<F>,
-    }
-  
-    impl<F> StepCircuit<F> for CubicCircuit<F>
-    where
-      F: PrimeField,
-    {
-      fn arity(&self) -> usize {
-        1
-      }
-  
-      fn synthesize<CS: ConstraintSystem<F>>(
-        &self,
-        cs: &mut CS,
-        z: &[AllocatedNum<F>],
-      ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
-        // Consider a cubic equation: `x^3 + x + 5 = y`, where `x` and `y` are respectively the input and output.
-        let x = &z[0];
-        let x_sq = x.square(cs.namespace(|| "x_sq"))?;
-        let x_cu = x_sq.mul(cs.namespace(|| "x_cu"), x)?;
-        let y = AllocatedNum::alloc(cs.namespace(|| "y"), || {
-          Ok(x_cu.get_value().unwrap() + x.get_value().unwrap() + F::from(5u64))
-        })?;
-  
-        cs.enforce(
-          || "y = x^3 + x + 5",
-          |lc| {
-            lc + x_cu.get_variable()
-              + x.get_variable()
-              + CS::one()
-              + CS::one()
-              + CS::one()
-              + CS::one()
-              + CS::one()
-          },
-          |lc| lc + CS::one(),
-          |lc| lc + y.get_variable(),
-        );
-  
-        Ok(vec![y])
-      }
-  
-      fn output(&self, z: &[F]) -> Vec<F> {
-        vec![z[0] * z[0] * z[0] + z[0] + F::from(5u64)]
-      }
+  #[derive(Clone, Debug, Default)]
+  struct CubicCircuit<F: PrimeField> {
+    _p: PhantomData<F>,
+  }
+
+  impl<F> StepCircuit<F> for CubicCircuit<F>
+  where
+    F: PrimeField,
+  {
+    fn arity(&self) -> usize {
+      1
     }
 
-    #[test]
-    fn test_parallel_ivc_base() {
-      // produce public parameters
-      let pp = PublicParams::<
-        G1,
-        G2,
-        TrivialTestCircuit<<G1 as Group>::Scalar>,
-        CubicCircuit<<G2 as Group>::Scalar>,
-      >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
-    
-      let num_steps = 1;
-    
-      // produce a recursive SNARK
-      let res = NovaTreeNode::new(
-        &pp,
-        TrivialTestCircuit::default(),
-        CubicCircuit::default(),
-        0,
-        vec![<G1 as Group>::Scalar::one()],
-        vec![<G1 as Group>::Scalar::one()],
-        vec![<G2 as Group>::Scalar::one()],
-        vec![<G2 as Group>::Scalar::from(5u64)],
+    fn synthesize<CS: ConstraintSystem<F>>(
+      &self,
+      cs: &mut CS,
+      z: &[AllocatedNum<F>],
+    ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
+      // Consider a cubic equation: `x^3 + x + 5 = y`, where `x` and `y` are respectively the input and output.
+      let x = &z[0];
+      let x_sq = x.square(cs.namespace(|| "x_sq"))?;
+      let x_cu = x_sq.mul(cs.namespace(|| "x_cu"), x)?;
+      let y = AllocatedNum::alloc(cs.namespace(|| "y"), || {
+        Ok(x_cu.get_value().unwrap() + x.get_value().unwrap() + F::from(5u64))
+      })?;
+
+      cs.enforce(
+        || "y = x^3 + x + 5",
+        |lc| {
+          lc + x_cu.get_variable()
+            + x.get_variable()
+            + CS::one()
+            + CS::one()
+            + CS::one()
+            + CS::one()
+            + CS::one()
+        },
+        |lc| lc + CS::one(),
+        |lc| lc + y.get_variable(),
       );
-      assert!(res.is_ok());
-      let recursive_snark = res.unwrap();
 
+      Ok(vec![y])
     }
 
-    #[test]
-    fn test_parallel_combine_two_ivc() {
-        // produce public parameters
-        let pp = PublicParams::<
-          G1,
-          G2,
-          TrivialTestCircuit<<G1 as Group>::Scalar>,
-          CubicCircuit<<G2 as Group>::Scalar>,
-        >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
-      
-        // produce a recursive SNARK
-        let res_0 = NovaTreeNode::new(
-          &pp,
-          TrivialTestCircuit::default(),
-          CubicCircuit::default(),
-          0,
-          vec![<G1 as Group>::Scalar::one()],
-          vec![<G1 as Group>::Scalar::one()],
-          vec![<G2 as Group>::Scalar::zero()],
-          vec![<G2 as Group>::Scalar::from(5u64)],
-        );
-        assert!(res_0.is_ok());
-        let recursive_snark_0 = res_0.unwrap();
+    fn output(&self, z: &[F]) -> Vec<F> {
+      vec![z[0] * z[0] * z[0] + z[0] + F::from(5u64)]
+    }
+  }
 
-        let res_1 = NovaTreeNode::new(
-            &pp,
-            TrivialTestCircuit::default(),
-            CubicCircuit::default(),
-            2,
-            vec![<G1 as Group>::Scalar::one()],
-            vec![<G1 as Group>::Scalar::one()],
-            vec![<G2 as Group>::Scalar::from(135u64)],
-            vec![<G2 as Group>::Scalar::from(2460515u64)],
-          );
-        assert!(res_1.is_ok());
-        let recursive_snark = res_1.unwrap();
+  #[test]
+  fn test_parallel_ivc_base() {
+    // produce public parameters
+    let pp = PublicParams::<
+      G1,
+      G2,
+      TrivialTestCircuit<<G1 as Group>::Scalar>,
+      CubicCircuit<<G2 as Group>::Scalar>,
+    >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
 
-        let res_2 = recursive_snark_0.merge(
-            recursive_snark,
-            &pp,
-            &TrivialTestCircuit::default(),
-            &CubicCircuit::default()
-        );
-        assert!(res_2.is_ok());
-  
-      }
+    let num_steps = 1;
+
+    // produce a recursive SNARK
+    let res = NovaTreeNode::new(
+      &pp,
+      TrivialTestCircuit::default(),
+      CubicCircuit::default(),
+      0,
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G2 as Group>::Scalar::one()],
+      vec![<G2 as Group>::Scalar::from(5u64)],
+    );
+    assert!(res.is_ok());
+    let recursive_snark = res.unwrap();
+  }
+
+  #[test]
+  fn test_parallel_combine_two_ivc() {
+    // produce public parameters
+    let pp = PublicParams::<
+      G1,
+      G2,
+      TrivialTestCircuit<<G1 as Group>::Scalar>,
+      CubicCircuit<<G2 as Group>::Scalar>,
+    >::setup(TrivialTestCircuit::default(), CubicCircuit::default());
+
+    // produce a recursive SNARK
+    let res_0 = NovaTreeNode::new(
+      &pp,
+      TrivialTestCircuit::default(),
+      CubicCircuit::default(),
+      0,
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G2 as Group>::Scalar::zero()],
+      vec![<G2 as Group>::Scalar::from(5u64)],
+    );
+    assert!(res_0.is_ok());
+    let recursive_snark_0 = res_0.unwrap();
+
+    let res_1 = NovaTreeNode::new(
+      &pp,
+      TrivialTestCircuit::default(),
+      CubicCircuit::default(),
+      2,
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G1 as Group>::Scalar::one()],
+      vec![<G2 as Group>::Scalar::from(135u64)],
+      vec![<G2 as Group>::Scalar::from(2460515u64)],
+    );
+    assert!(res_1.is_ok());
+    let recursive_snark = res_1.unwrap();
+
+    let res_2 = recursive_snark_0.merge(
+      recursive_snark,
+      &pp,
+      &TrivialTestCircuit::default(),
+      &CubicCircuit::default(),
+    );
+    assert!(res_2.is_ok());
+  }
 }
