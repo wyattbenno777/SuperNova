@@ -390,7 +390,7 @@ where
           c_secondary.clone(),
           pp.ro_consts_circuit_secondary.clone(),
         );
-        //let _ = circuit_secondary.synthesize(&mut cs_secondary);
+        let _ = circuit_secondary.synthesize(&mut cs_secondary);
 
         let (l_u_secondary, l_w_secondary) = cs_secondary
           .r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)
