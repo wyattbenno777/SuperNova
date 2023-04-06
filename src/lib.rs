@@ -27,6 +27,7 @@ pub mod provider;
 pub mod spartan;
 pub mod traits;
 
+use ark_std::{start_timer, end_timer};
 use crate::bellperson::{
   r1cs::{NovaShape, NovaWitness},
   shape_cs::ShapeCS,
@@ -198,12 +199,15 @@ where
     z0_primary: Vec<G1::Scalar>,
     z0_secondary: Vec<G2::Scalar>,
   ) -> Result<Self, NovaError> {
+    let prove_step_timer = start_timer!(|| "Prove step (inside)");
     if z0_primary.len() != pp.F_arity_primary || z0_secondary.len() != pp.F_arity_secondary {
       return Err(NovaError::InvalidInitialInputLength);
     }
 
     match recursive_snark {
       None => {
+        let base_case_timer = start_timer!(|| "Base case");
+
         // base case for the primary
         let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
         let inputs_primary: NovaAugmentedCircuitInputs<G2> = NovaAugmentedCircuitInputs::new(
@@ -282,6 +286,8 @@ where
           return Err(NovaError::InvalidStepOutputLength);
         }
 
+        end_timer!(base_case_timer);
+
         Ok(Self {
           r_W_primary,
           r_U_primary,
@@ -297,9 +303,13 @@ where
           _p_c1: Default::default(),
           _p_c2: Default::default(),
         })
+
       }
       Some(r_snark) => {
+        let recursive_timer = start_timer!(|| "Recursive case");
+
         // fold the secondary circuit's instance
+        let nifs_prove1_timer = start_timer!(|| "NIFS prove 1");
         let (nifs_secondary, (r_U_secondary, r_W_secondary)) = NIFS::prove(
           &pp.ck_secondary,
           &pp.ro_consts_secondary,
@@ -310,7 +320,9 @@ where
           &r_snark.l_w_secondary,
           false,
         )?;
+        end_timer!(nifs_prove1_timer);
 
+        let augmented_circuit_timer = start_timer!(|| "Augmented circuit");
         let mut cs_primary: SatisfyingAssignment<G1> = SatisfyingAssignment::new();
         let inputs_primary: NovaAugmentedCircuitInputs<G2> = NovaAugmentedCircuitInputs::new(
           pp.r1cs_shape_secondary.get_digest(),
@@ -333,6 +345,7 @@ where
         let (l_u_primary, l_w_primary) = cs_primary
           .r1cs_instance_and_witness(&pp.r1cs_shape_primary, &pp.ck_primary)
           .map_err(|_e| NovaError::UnSat)?;
+        end_timer!(augmented_circuit_timer);
 
         let l_u_primary = RelaxedR1CSInstance::from_r1cs_instance(
           &pp.ck_primary,
@@ -343,6 +356,7 @@ where
           RelaxedR1CSWitness::from_r1cs_witness(&pp.r1cs_shape_primary, &l_w_primary);
 
         // fold the primary circuit's instance
+        let nifs_prove2_timer = start_timer!(|| "NIFS prove 2");
         let (nifs_primary, (r_U_primary, r_W_primary)) = NIFS::prove(
           &pp.ck_primary,
           &pp.ro_consts_primary,
@@ -353,7 +367,10 @@ where
           &l_w_primary,
           false,
         )?;
+        end_timer!(nifs_prove2_timer);
 
+
+        let nifs_prove1_secondary_timer = start_timer!(|| "NIFS prove secondary 1");
         let mut cs_secondary: SatisfyingAssignment<G2> = SatisfyingAssignment::new();
         let inputs_secondary: NovaAugmentedCircuitInputs<G1> = NovaAugmentedCircuitInputs::new(
           pp.r1cs_shape_primary.get_digest(),
@@ -364,7 +381,9 @@ where
           Some(l_u_primary.clone()),
           Some(Commitment::<G1>::decompress(&nifs_primary.comm_T)?),
         );
+        end_timer!(nifs_prove1_secondary_timer);
 
+        let augmented_circuit_secondary_timer = start_timer!(|| "Augmented secondary circuit");
         let circuit_secondary: NovaAugmentedCircuit<G1, C2> = NovaAugmentedCircuit::new(
           pp.augmented_circuit_params_secondary.clone(),
           Some(inputs_secondary),
@@ -376,6 +395,7 @@ where
         let (l_u_secondary, l_w_secondary) = cs_secondary
           .r1cs_instance_and_witness(&pp.r1cs_shape_secondary, &pp.ck_secondary)
           .map_err(|_e| NovaError::UnSat)?;
+        end_timer!(augmented_circuit_secondary_timer);
 
         let l_w_secondary =
           RelaxedR1CSWitness::<G2>::from_r1cs_witness(&pp.r1cs_shape_secondary, &l_w_secondary);
@@ -388,6 +408,9 @@ where
         // update the running instances and witnesses
         let zi_primary = c_primary.output(&r_snark.zi_primary);
         let zi_secondary = c_secondary.output(&r_snark.zi_secondary);
+
+        end_timer!(recursive_timer);
+        end_timer!(prove_step_timer);
 
         Ok(Self {
           r_W_primary,
