@@ -21,7 +21,7 @@ rand_chacha = "0.3"
 itertools = "0.9.0"
 subtle = "2.4"
 pasta_curves = { version = "0.5", features = ["repr-c", "serde"] }
-neptune = { version = "10.0.0", default-features = false }
+neptune = { version = "9.0.0", default-features = false }
 generic-array = "0.14.4"
 num-bigint = { version = "0.4", features = ["serde", "rand"] }
 num-traits = "0.2"
@@ -50,7 +50,7 @@ name = "compressed-snark"
 harness = false
 
 [features]
-default = ["hypernova"]
+default = []
 # Compiles in portable mode, w/o ISA extensions => binary can be executed on all systems.
 portable = ["pasta-msm/portable"]
 cuda = ["neptune/cuda", "neptune/pasta", "neptune/arity24"]
