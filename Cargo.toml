@@ -32,13 +32,13 @@ flate2 = "1.0"
 bitvec = "1.0"
 byteorder = "1.4.3"
 thiserror = "1.0" 
+rand = "0.8.4"
 
 [target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
 pasta-msm = { version = "0.1.4" }
 
 [dev-dependencies]
 criterion = "0.3.1"
-rand = "0.8.4"
 hex = "0.4.3"
 
 [[bench]]
