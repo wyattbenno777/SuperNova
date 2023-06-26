@@ -3,7 +3,7 @@
 pub(crate) mod math;
 pub(crate) mod polynomial;
 pub mod pp;
-mod sumcheck;
+pub mod sumcheck;
 
 use crate::{
   compute_digest,
