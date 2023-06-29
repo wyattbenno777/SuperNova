@@ -31,6 +31,8 @@ mod ccs;
 mod hypercube;
 #[cfg(feature = "hypernova")]
 mod utils;
+#[cfg(feature = "supernova")]
+mod supernova;
 
 use crate::bellperson::{
   r1cs::{NovaShape, NovaWitness},
