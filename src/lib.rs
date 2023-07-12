@@ -29,10 +29,10 @@ pub mod traits;
 mod ccs;
 #[cfg(feature = "hypernova")]
 mod hypercube;
-#[cfg(feature = "hypernova")]
-mod utils;
 #[cfg(feature = "supernova")]
 mod supernova;
+#[cfg(feature = "hypernova")]
+mod utils;
 
 use crate::bellperson::{
   r1cs::{NovaShape, NovaWitness},
