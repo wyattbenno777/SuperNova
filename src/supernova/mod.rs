@@ -274,33 +274,32 @@ where
           return Err(NovaError::ProofVerifyError);
         }
 
-        println!("hash should be {:?}", l_u_secondary.X);
+        //println!("hash should be {:?}", l_u_secondary.X);
     
         // check if the output hashes in R1CS point to last running instance.
-        let hash_primary = {
-          let mut hasher = <G2 as Group>::RO::new(
-            pp.ro_consts_secondary.clone(),
+        let hash = {
+          let mut hasher = <G1 as Group>::RO::new(
+            pp.ro_consts_primary.clone(),
             2 + U_i.len() * pp.F_arity_primary
           );
-          hasher.absorb(G1::Scalar::from(pci as u64));
-          for e in &zi_primary {
+          hasher.absorb(G2::Scalar::from(pci as u64));
+          for e in &z0_secondary {
             hasher.absorb(*e);
           }
-          let values_U_i: Vec<G1::Scalar> = U_i.to_vec().iter().map(|&num| G1::Scalar::from(num as u64)).collect();
+          let values_U_i: Vec<G2::Scalar> = U_i.to_vec().iter().map(|&num| G2::Scalar::from(num as u64)).collect();
           for e in values_U_i {
             hasher.absorb(e.clone());
-          }  
-    
+          } 
           hasher.squeeze(NUM_HASH_BITS)
         };
 
-        println!("hash out {:?}", hash_primary);
+        //println!("hash out {:?}", hash);
+
     
-        /*if hash_primary != self.l_u_secondary.X[0]
-          || hash_secondary != scalar_as_base::<G2>(self.l_u_secondary.X[1])
+        if hash.to_repr().as_ref() != l_u_secondary.X[2].to_repr().as_ref()
         {
           return Err(NovaError::ProofVerifyError);
-        }*/
+        }
     
         Ok(())
       }
@@ -721,6 +720,7 @@ where
     num_steps: usize,
     mut pci: usize,
     mut U_i: Vec<usize>,
+    last_z0_secondary: Vec<G2::Scalar>,
     last_running_instance: Option<NivcSNARK<G1, G2, C5, C6>>,
     last_running_claim: Option<RunningClaim<G1, G2, C7, C8>>
   ) -> Result<(NivcSNARK<G1, G2, C1, C2>, Result<(Vec<G1::Scalar>, Vec<G2::Scalar>, usize, G2::Scalar), NovaError>), Box<dyn std::error::Error>>
@@ -781,7 +781,7 @@ where
             _instance.zi_primary,
             &mut U_i,
             vec![<G1 as Group>::Scalar::ONE],
-            vec![<G2 as Group>::Scalar::ZERO],
+            last_z0_secondary,
           );
                   //assert!(res.is_ok());
         } else {
@@ -1048,6 +1048,7 @@ mod tests {
       3, // amount of times the user wants to loop this circuit.
       1, // PCi
       U_i.to_vec(), // U_i
+      vec![<G2 as Group>::Scalar::ZERO],
       dummy_snark, // last running instance.
       Some(running_claim1.clone()) // last running claim
     ).unwrap(); 
@@ -1055,12 +1056,11 @@ mod tests {
     // Destructure the tuple into nivc_snark and result
     let (nivc_snark, result) = rc1;
 
-    // Now you can handle the Result using if let
     if let Ok((zi_primary, zi_secondary, new_pci, new_super_nova_hash)) = result {
-       /*println!("zi_primary: {:?}", zi_primary);
+        println!("zi_primary: {:?}", zi_primary);
         println!("zi_secondary: {:?}", zi_secondary);
         println!("new_pci: {:?}", new_pci);
-        println!("new_super_nova_hash: {:?}", new_super_nova_hash);*/
+        println!("new_super_nova_hash: {:?}", new_super_nova_hash);
 
         let rc2 = NivcSNARK::execute_and_verify_circuits(
           1, // Which Fi?
@@ -1069,6 +1069,7 @@ mod tests {
           2, // amount of times the user wants to loop this circuit.
           new_pci, // PCi
           U_i.to_vec(), // U_i
+          zi_secondary,
           Some(nivc_snark), // last running instance.
           Some(running_claim1.clone()), // last running claim
         ).unwrap();
