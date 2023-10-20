@@ -386,6 +386,7 @@ pub fn conditionally_select_alloc_relaxed_r1cs<
 }
 
 /// c = cond ? a: b, where a, b: vec[AllocatedRelaxedR1CSInstance]
+#[allow(unused)]
 pub fn conditionally_select_vec_allocated_relaxed_r1cs_instance<
   G: Group,
   CS: ConstraintSystem<<G as Group>::Base>,
