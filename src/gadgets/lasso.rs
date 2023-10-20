@@ -5,12 +5,19 @@ use bellpepper_core::{num::AllocatedNum, ConstraintSystem, LinearCombination, Sy
 use crate::constants::NUM_CHALLENGE_BITS;
 use crate::gadgets::nonnative::util::Num;
 use crate::gadgets::utils::alloc_const;
-use crate::traits::ROCircuitTrait;
+use crate::traits::{ROCircuitTrait, TranscriptEngineTrait};
 use crate::traits::{Group, ROConstantsCircuit};
 use ff::{Field};
-use crate::spartan::sumcheck::CompressedUniPoly;
+use crate::spartan::sumcheck::{CompressedUniPoly};
+use crate::spartan::polynomial::SparsePolynomial;
+use crate::errors::NovaError;
 
 use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_to_num};
+
+/// There are three main phases of Lasso verification
+// 1. Primary Sumcheck
+// 2. CombineTableEval proof.
+// 3. Memory check that uses an adapted GKR protocol.
 
 /// Circuit gadget that implements the sumcheck verifier
 #[derive(Clone)]
@@ -20,19 +27,148 @@ pub struct SumcheckVerificationCircuit<G: Group> {
 
 #[allow(unused)]
 impl<G: Group> SumcheckVerificationCircuit<G> {
-  fn verifiy_sumcheck(
+  fn verify_sumcheck(
     &self,
     claim: G::Scalar,
     num_rounds: usize,
     degree_bound: usize,
     transcript: &mut G::TE,
-  ) -> Result<(), SynthesisError>  {
+  ) -> Result<(G::Scalar, Vec<G::Scalar>), NovaError>  {
     let mut e = claim;
     let mut r: Vec<G::Scalar> = Vec::new();
+
+    // Check that there is a univariate polynomial for each round
+    assert_eq!(self.compressed_polys.len(), num_rounds);
     for i in 0..self.compressed_polys.len() {
+      let poly = self.compressed_polys[i].decompress(&e);
+
+      // Check degree bound
+      assert_eq!(poly.degree(), degree_bound);
+      debug_assert_eq!(poly.eval_at_zero() + poly.eval_at_one(), e);
+
+      transcript.absorb(b"p", &poly);
+
+      let r_i = transcript.squeeze(b"c")?;
+
+      r.push(r_i);
+
+      // evaluate the claimed degree-ell polynomial at r_i
+      e = poly.evaluate(&r_i);
+
     }
-    Ok(())
+    Ok((e, r))
   }
+}
+
+#[derive(Clone)]
+pub struct PrimarySumcheckR1CSCircuit<G: Group> {
+  pub num_vars: usize,
+  pub num_cons: usize,
+  pub input: Vec<G::Scalar>,
+  pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
+  pub evals: (G::Scalar, G::Scalar, G::Scalar),
+  pub prev_challenge: G::Scalar,
+  pub claims_phase2: (G::Scalar, G::Scalar, G::Scalar, G::Scalar),
+  pub eval_vars_at_ry: G::Scalar,
+  pub sc_phase1: SumcheckVerificationCircuit<G>,
+  pub sc_phase2: SumcheckVerificationCircuit<G>,
+  // The point on which the polynomial was evaluated by the prover.
+  pub claimed_rx: Vec<G::Scalar>,
+  pub claimed_ry: Vec<G::Scalar>,
+  pub claimed_transcript_sat_state: G::Scalar,
+}
+
+impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
+  #[allow(unused)]
+  pub fn new(config: &VerifierConfig<G>) -> Self {
+    Self {
+      num_vars: config.num_vars,
+      num_cons: config.num_cons,
+      input: config.input.clone(),
+      input_as_sparse_poly: config.input_as_sparse_poly.clone(),
+      evals: config.evals,
+      prev_challenge: config.prev_challenge,
+      claims_phase2: config.claims_phase2,
+      eval_vars_at_ry: config.eval_vars_at_ry,
+      sc_phase1: SumcheckVerificationCircuit {
+        compressed_polys: config.polys_sc1.clone(),
+      },
+      sc_phase2: SumcheckVerificationCircuit {
+        compressed_polys: config.polys_sc2.clone(),
+      },
+      claimed_rx: config.rx.clone(),
+      claimed_ry: config.ry.clone(),
+      claimed_transcript_sat_state: config.transcript_sat_state,
+    }
+  }
+
+  fn generate_constraints<CS: ConstraintSystem<G::Base>>(
+    mut cs: CS,
+    a: &AllocatedNum<G::Base>,
+    b: &AllocatedNum<G::Base>,
+    n_bits: usize,
+  ) -> Result<AllocatedNum<G::Base>, SynthesisError>
+  where
+    <G as Group>::Base: PartialOrd,
+  {
+    assert!(n_bits < 64, "not support n_bits {n_bits} >= 64");
+    let range = alloc_const(
+      cs.namespace(|| "range"),
+      G::Base::from(2_usize.pow(n_bits as u32) as u64),
+    )?;
+    let diff = Num::alloc(cs.namespace(|| "diff"), || {
+      a.get_value()
+        .zip(b.get_value())
+        .zip(range.get_value())
+        .map(|((a, b), range)| {
+          let lt = a < b;
+          (a - b) + (if lt { range } else { G::Base::ZERO })
+        })
+        .ok_or(SynthesisError::AssignmentMissing)
+    })?;
+    diff.fits_in_bits(cs.namespace(|| "diff fit in bits"), n_bits)?;
+    let lt = AllocatedNum::alloc(cs.namespace(|| "lt"), || {
+      a.get_value()
+        .zip(b.get_value())
+        .map(|(a, b)| G::Base::from((a < b) as u64))
+        .ok_or(SynthesisError::AssignmentMissing)
+    })?;
+    cs.enforce(
+      || "lt is bit",
+      |lc| lc + lt.get_variable(),
+      |lc| lc + CS::one() - lt.get_variable(),
+      |lc| lc,
+    );
+    cs.enforce(
+      || "lt ⋅ range == diff - lhs + rhs",
+      |lc| lc + lt.get_variable(),
+      |lc| lc + range.get_variable(),
+      |_| diff.num + (G::Base::ONE.invert().unwrap(), a.get_variable()) + b.get_variable(),
+    );
+    Ok(lt)
+  }
+}
+
+#[derive(Clone)]
+pub struct VerifierConfig<G: Group> {
+  pub num_vars: usize,
+  pub num_cons: usize,
+  pub input: Vec<G::Scalar>,
+  pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
+  pub evals: (G::Scalar, G::Scalar, G::Scalar),
+  pub prev_challenge: G::Scalar,
+  pub claims_phase2: (
+    G::Scalar,
+    G::Scalar,
+    G::Scalar,
+    G::Scalar,
+  ),
+  pub eval_vars_at_ry: G::Scalar,
+  pub polys_sc1: Vec<CompressedUniPoly<G::Scalar>>,
+  pub polys_sc2: Vec<CompressedUniPoly<G::Scalar>>,
+  pub rx: Vec<G::Scalar>,
+  pub ry: Vec<G::Scalar>,
+  pub transcript_sat_state: G::Scalar,
 }
 
 /// rw trace
