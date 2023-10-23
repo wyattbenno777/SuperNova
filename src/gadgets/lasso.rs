@@ -23,6 +23,8 @@ use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_
 #[derive(Clone)]
 pub struct SumcheckVerificationCircuit<G: Group> {
   pub compressed_polys: Vec<CompressedUniPoly<G::Scalar>>,
+  pub num_rounds: usize,
+  pub degree_bound: usize,
 }
 
 #[allow(unused)]
@@ -30,20 +32,18 @@ impl<G: Group> SumcheckVerificationCircuit<G> {
   fn verify_sumcheck(
     &self,
     claim: G::Scalar,
-    num_rounds: usize,
-    degree_bound: usize,
     transcript: &mut G::TE,
   ) -> Result<(G::Scalar, Vec<G::Scalar>), NovaError>  {
     let mut e = claim;
     let mut r: Vec<G::Scalar> = Vec::new();
 
     // Check that there is a univariate polynomial for each round
-    assert_eq!(self.compressed_polys.len(), num_rounds);
+    assert_eq!(self.compressed_polys.len(), self.num_rounds);
     for i in 0..self.compressed_polys.len() {
       let poly = self.compressed_polys[i].decompress(&e);
 
       // Check degree bound
-      assert_eq!(poly.degree(), degree_bound);
+      assert_eq!(poly.degree(), self.degree_bound);
       debug_assert_eq!(poly.eval_at_zero() + poly.eval_at_one(), e);
 
       transcript.absorb(b"p", &poly);
@@ -62,8 +62,6 @@ impl<G: Group> SumcheckVerificationCircuit<G> {
 
 #[derive(Clone)]
 pub struct PrimarySumcheckR1CSCircuit<G: Group> {
-  pub num_vars: usize,
-  pub num_cons: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
@@ -72,7 +70,7 @@ pub struct PrimarySumcheckR1CSCircuit<G: Group> {
   pub eval_vars_at_ry: G::Scalar,
   pub sc_phase1: SumcheckVerificationCircuit<G>,
   pub sc_phase2: SumcheckVerificationCircuit<G>,
-  // The point on which the polynomial was evaluated by the prover.
+  // The points at which the polynomial was evaluated by the prover.
   pub claimed_rx: Vec<G::Scalar>,
   pub claimed_ry: Vec<G::Scalar>,
   pub claimed_transcript_sat_state: G::Scalar,
@@ -82,8 +80,6 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
   #[allow(unused)]
   pub fn new(config: &VerifierConfig<G>) -> Self {
     Self {
-      num_vars: config.num_vars,
-      num_cons: config.num_cons,
       input: config.input.clone(),
       input_as_sparse_poly: config.input_as_sparse_poly.clone(),
       evals: config.evals,
@@ -92,9 +88,13 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
       eval_vars_at_ry: config.eval_vars_at_ry,
       sc_phase1: SumcheckVerificationCircuit {
         compressed_polys: config.polys_sc1.clone(),
+        num_rounds: config.num_rounds,
+        degree_bound: config.degree_bound,
       },
       sc_phase2: SumcheckVerificationCircuit {
         compressed_polys: config.polys_sc2.clone(),
+        num_rounds: config.num_rounds,
+        degree_bound: config.degree_bound,
       },
       claimed_rx: config.rx.clone(),
       claimed_ry: config.ry.clone(),
@@ -102,57 +102,131 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     }
   }
 
-  fn generate_constraints<CS: ConstraintSystem<G::Base>>(
-    mut cs: CS,
-    a: &AllocatedNum<G::Base>,
-    b: &AllocatedNum<G::Base>,
-    n_bits: usize,
-  ) -> Result<AllocatedNum<G::Base>, SynthesisError>
-  where
-    <G as Group>::Base: PartialOrd,
-  {
-    assert!(n_bits < 64, "not support n_bits {n_bits} >= 64");
-    let range = alloc_const(
-      cs.namespace(|| "range"),
-      G::Base::from(2_usize.pow(n_bits as u32) as u64),
+  pub fn synthesize<CS: ConstraintSystem<G::Scalar>>(
+    self,
+    cs: &mut CS,
+    transcript: &mut G::TE   
+  ) -> Result<
+    (
+      AllocatedNum<G::Scalar>,
+      Vec<Vec<AllocatedNum<G::Scalar>>>,
+      Vec<Vec<AllocatedNum<G::Scalar>>>,
+      Vec<AllocatedNum<G::Scalar>>,
+      Vec<AllocatedNum<G::Scalar>>,
+      Vec<AllocatedNum<G::Scalar>>,
+      AllocatedNum<G::Scalar>,
+    ),
+    SynthesisError
+  > {
+  
+    //allocate input for the challange var.
+    let initial_challenge = self.prev_challenge;
+    let initial_challenge_var = AllocatedNum::alloc_input(
+       cs.namespace(|| "initial challenge"), || Ok(initial_challenge)
     )?;
-    let diff = Num::alloc(cs.namespace(|| "diff"), || {
-      a.get_value()
-        .zip(b.get_value())
-        .zip(range.get_value())
-        .map(|((a, b), range)| {
-          let lt = a < b;
-          (a - b) + (if lt { range } else { G::Base::ZERO })
+     
+    //allocate poly witness for sum-check round1
+    let poly_sc1_vars: Vec<_> = self.sc_phase1.compressed_polys.iter()
+      .map(|p| {
+  
+        let poly = p.decompress(&initial_challenge);
+        poly.coeffs.into_iter().map(|coeff| {
+          AllocatedNum::alloc(
+             cs.namespace(|| "poly_coeff1"),
+             || Ok(coeff)
+          )
+          .expect("allocated coeff")
         })
-        .ok_or(SynthesisError::AssignmentMissing)
-    })?;
-    diff.fits_in_bits(cs.namespace(|| "diff fit in bits"), n_bits)?;
-    let lt = AllocatedNum::alloc(cs.namespace(|| "lt"), || {
-      a.get_value()
-        .zip(b.get_value())
-        .map(|(a, b)| G::Base::from((a < b) as u64))
-        .ok_or(SynthesisError::AssignmentMissing)
-    })?;
-    cs.enforce(
-      || "lt is bit",
-      |lc| lc + lt.get_variable(),
-      |lc| lc + CS::one() - lt.get_variable(),
-      |lc| lc,
-    );
-    cs.enforce(
-      || "lt ⋅ range == diff - lhs + rhs",
-      |lc| lc + lt.get_variable(),
-      |lc| lc + range.get_variable(),
-      |_| diff.num + (G::Base::ONE.invert().unwrap(), a.get_variable()) + b.get_variable(),
-    );
-    Ok(lt)
+        .collect() 
+  
+      })
+      .collect();
+
+    //allocate poly witness for sum-check round2
+    let poly_sc2_vars: Vec<_> = self.sc_phase2.compressed_polys.iter()
+      .map(|p| {
+  
+        let poly = p.decompress(&initial_challenge);
+        poly.coeffs.into_iter().map(|coeff| {
+          AllocatedNum::alloc(
+             cs.namespace(|| "poly_coeff2"),
+             || Ok(coeff)
+          )
+          .expect("allocated coeff2")
+        })
+        .collect() 
+  
+      })
+      .collect();
+
+    //allocate inputs
+    let input_vars: Vec<_> = self.input.iter()
+    .map(|p| {
+
+      transcript.absorb(b"p", p);
+
+      AllocatedNum::alloc_input(
+          cs.namespace(|| "input"),
+          || Ok(*p)
+      )
+      .expect("allocated input")
+
+    })
+    .collect();
+
+    //allocate prover evals x
+    let claimed_rx_vars: Vec<_> = self.claimed_rx.iter()
+    .map(|p| {
+
+      AllocatedNum::alloc_input(
+          cs.namespace(|| "claimed_rx"),
+          || Ok(*p)
+      )
+      .expect("allocated claimed_rx")
+
+    })
+    .collect();
+
+    //allocate prover evals y
+    let claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
+    .map(|p| {
+
+      AllocatedNum::alloc_input(
+          cs.namespace(|| "claimed_ry"),
+          || Ok(*p)
+      )
+      .expect("allocated claimed_ry")
+
+    })
+    .collect();
+
+    let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(G::Scalar::ZERO))?;
+
+    /*let (_claim_post_phase1_var, _rx_var) =
+    self
+      .sc_phase1
+      .verify_sumcheck(G::Scalar::ZERO, &mut transcript)?;
+
+    let result = self.sc_phase1.verify_sumcheck(...);
+    result.map_err(|e| SynthesisError::from(e))?;*/
+  
+    Ok((
+      initial_challenge_var,
+      poly_sc1_vars,
+      poly_sc2_vars,
+      input_vars,
+      claimed_rx_vars,
+      claimed_ry_vars,
+      claim_phase1_var
+    ))
+    
   }
 }
 
 #[derive(Clone)]
 pub struct VerifierConfig<G: Group> {
-  pub num_vars: usize,
-  pub num_cons: usize,
+  pub num_rounds: usize,
+  pub degree_bound: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),

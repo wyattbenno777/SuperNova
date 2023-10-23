@@ -304,7 +304,7 @@ impl<G: Group> SumcheckProof<G> {
 // ax^3 + bx^2 + cx + d stored as vec![a,b,c,d]
 #[derive(Debug, Clone)]
 pub struct UniPoly<Scalar: PrimeField> {
-  coeffs: Vec<Scalar>,
+  pub coeffs: Vec<Scalar>,
 }
 
 // ax^2 + bx + c stored as vec![a,c]
