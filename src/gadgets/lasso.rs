@@ -11,6 +11,7 @@ use ff::{Field};
 use crate::spartan::sumcheck::{CompressedUniPoly};
 use crate::spartan::polynomial::SparsePolynomial;
 use crate::errors::NovaError;
+use crate::spartan::math::Math;
 
 use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_to_num};
 
@@ -60,8 +61,15 @@ impl<G: Group> SumcheckVerificationCircuit<G> {
   }
 }
 
+impl From<NovaError> for SynthesisError {
+  fn from(_err: NovaError) -> Self {
+     SynthesisError::AssignmentMissing
+  }
+}
+
 #[derive(Clone)]
 pub struct PrimarySumcheckR1CSCircuit<G: Group> {
+  pub num_cons: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
@@ -80,6 +88,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
   #[allow(unused)]
   pub fn new(config: &VerifierConfig<G>) -> Self {
     Self {
+      num_cons: config.num_cons.clone(),
       input: config.input.clone(),
       input_as_sparse_poly: config.input_as_sparse_poly.clone(),
       evals: config.evals,
@@ -107,15 +116,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     cs: &mut CS,
     transcript: &mut G::TE   
   ) -> Result<
-    (
-      AllocatedNum<G::Scalar>,
-      Vec<Vec<AllocatedNum<G::Scalar>>>,
-      Vec<Vec<AllocatedNum<G::Scalar>>>,
-      Vec<AllocatedNum<G::Scalar>>,
-      Vec<AllocatedNum<G::Scalar>>,
-      Vec<AllocatedNum<G::Scalar>>,
-      AllocatedNum<G::Scalar>,
-    ),
+    (),
     SynthesisError
   > {
   
@@ -124,9 +125,11 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     let initial_challenge_var = AllocatedNum::alloc_input(
        cs.namespace(|| "initial challenge"), || Ok(initial_challenge)
     )?;
+
+    transcript.absorb(b"initial_challenge_var", &initial_challenge_var.get_value().unwrap());
      
     //allocate poly witness for sum-check round1
-    let poly_sc1_vars: Vec<_> = self.sc_phase1.compressed_polys.iter()
+    let _poly_sc1_vars: Vec<_> = self.sc_phase1.compressed_polys.iter()
       .map(|p| {
   
         let poly = p.decompress(&initial_challenge);
@@ -137,13 +140,13 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
           )
           .expect("allocated coeff")
         })
-        .collect() 
+        .collect::<Vec<_>>() 
   
       })
       .collect();
 
     //allocate poly witness for sum-check round2
-    let poly_sc2_vars: Vec<_> = self.sc_phase2.compressed_polys.iter()
+    let _poly_sc2_vars: Vec<_> = self.sc_phase2.compressed_polys.iter()
       .map(|p| {
   
         let poly = p.decompress(&initial_challenge);
@@ -154,13 +157,13 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
           )
           .expect("allocated coeff2")
         })
-        .collect() 
+        .collect::<Vec<_>>() 
   
       })
       .collect();
 
     //allocate inputs
-    let input_vars: Vec<_> = self.input.iter()
+    let _input_vars: Vec<_> = self.input.iter()
     .map(|p| {
 
       transcript.absorb(b"p", p);
@@ -188,7 +191,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     .collect();
 
     //allocate prover evals y
-    let claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
+    let _claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
     .map(|p| {
 
       AllocatedNum::alloc_input(
@@ -202,23 +205,76 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 
     let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(G::Scalar::ZERO))?;
 
-    /*let (_claim_post_phase1_var, _rx_var) =
-    self
-      .sc_phase1
-      .verify_sumcheck(G::Scalar::ZERO, &mut transcript)?;
+    let result = self.sc_phase1.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
+    let (_claim_post_phase1_var, rx_var) = result.map_err(|e| SynthesisError::from(e))?;
 
-    let result = self.sc_phase1.verify_sumcheck(...);
-    result.map_err(|e| SynthesisError::from(e))?;*/
+    let rx_vars: Vec<_> = rx_var.iter()
+    .map(|p| {
+
+      AllocatedNum::alloc(
+          cs.namespace(|| "rx_var"),
+          || Ok(*p)
+      )
+      .expect("allocated rx_var")
+
+    })
+    .collect();
+
+    // Constraints ensure that this is indeed the result from the first
+    // round of sumcheck; (rx, ry) is sent to the verifier for the evaluation proof.
+    for (i, claimed_rx_var) in claimed_rx_vars.iter().enumerate() {
+
+      cs.enforce(
+        || "check rx",
+        |lc| lc + rx_vars[i].get_variable(), 
+        |lc| lc + claimed_rx_var.get_variable(),
+        |lc| lc + CS::one()
+      );
+    
+    }
+
+    let (Az_claim, Bz_claim, Cz_claim, prod_Az_Bz_claims) = self.claims_phase2;
+
+    let _Az_claim_var = AllocatedNum::alloc(
+      cs.namespace(|| "Az_claim_var"), 
+      || Ok(Az_claim)
+    )?;
+
+    let _Bz_claim_var = AllocatedNum::alloc(
+      cs.namespace(|| "Bz_claim_var"), 
+      || Ok(Bz_claim)
+    )?;
+
+    let _Cz_claim_var = AllocatedNum::alloc(
+      cs.namespace(|| "Cz_claim_var"), 
+      || Ok(Cz_claim)
+    )?;
+
+    let _prod_Az_Bz_claim_var = AllocatedNum::alloc(
+      cs.namespace(|| "prod_Az_Bz_claim_var"), 
+      || Ok(prod_Az_Bz_claims)
+    )?;
+
+    let _one = AllocatedNum::alloc(cs.namespace(|| "one"), || Ok(G::Scalar::ONE))?;
+    let num_rounds_x = self.num_cons.log_2();
+    let _tau_vars: Vec<_> = (0..num_rounds_x)
+    .map(|_| {
+
+      let rand = match transcript.squeeze(b"tau") {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+      };
+
+      Ok(AllocatedNum::alloc(
+          cs.namespace(|| "num_rounds_x"),
+          || Ok(rand)
+      )
+      .expect("allocated num_rounds_xr"))
+
+    })
+    .collect();
   
-    Ok((
-      initial_challenge_var,
-      poly_sc1_vars,
-      poly_sc2_vars,
-      input_vars,
-      claimed_rx_vars,
-      claimed_ry_vars,
-      claim_phase1_var
-    ))
+    Ok(())
     
   }
 }
@@ -226,6 +282,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 #[derive(Clone)]
 pub struct VerifierConfig<G: Group> {
   pub num_rounds: usize,
+  pub num_cons: usize,
   pub degree_bound: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
