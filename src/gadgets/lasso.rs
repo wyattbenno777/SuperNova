@@ -245,19 +245,19 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
       || Ok(Bz_claim)
     )?;
 
-    let _Cz_claim_var = AllocatedNum::alloc(
+    let Cz_claim_var = AllocatedNum::alloc(
       cs.namespace(|| "Cz_claim_var"), 
       || Ok(Cz_claim)
     )?;
 
-    let _prod_Az_Bz_claim_var = AllocatedNum::alloc(
+    let prod_Az_Bz_claim_var = AllocatedNum::alloc(
       cs.namespace(|| "prod_Az_Bz_claim_var"), 
       || Ok(prod_Az_Bz_claims)
     )?;
 
-    let _one = AllocatedNum::alloc(cs.namespace(|| "one"), || Ok(G::Scalar::ONE))?;
+    let one = G::Scalar::ONE;
     let num_rounds_x = self.num_cons.log_2();
-    let _tau_vars: Vec<_> = (0..num_rounds_x)
+    let tau_vars: Vec<_> = (0..num_rounds_x)
     .map(|_| {
 
       let rand = match transcript.squeeze(b"tau") {
@@ -273,6 +273,33 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 
     })
     .collect();
+
+    let prod_vars: Vec<_> = (0..rx_var.len())
+    .map(|i| {
+      let tau_i = tau_vars[i].clone();
+
+      let tau_value = match tau_i {
+        Ok(v) => v.get_value().unwrap(),
+        Err(e) => return Err(e), 
+      };
+
+      Ok((rx_var[i] * tau_value) +
+      (one - rx_var[i]) * (one - tau_value))
+    }).collect();
+
+    let mut taus_bound_rx_var = G::Scalar::ONE;
+
+    for p_var in prod_vars.iter() {
+      let temp = G::Scalar::ONE;
+      let p_var_value = match p_var {
+        Ok(v) => v,
+        Err(_) => &temp, 
+      };
+      taus_bound_rx_var *= p_var_value;
+    }
+    
+    let _expected_claim_post_phase1_var =
+    (prod_Az_Bz_claim_var.get_value().unwrap() - Cz_claim_var.get_value().unwrap())* taus_bound_rx_var;
   
     Ok(())
     
