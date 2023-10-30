@@ -191,7 +191,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     .collect();
 
     //allocate prover evals y
-    let _claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
+    let claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
     .map(|p| {
 
       AllocatedNum::alloc_input(
@@ -322,11 +322,43 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     let r_B_var = transcript.squeeze(b"r_B")?;
     let r_C_var = transcript.squeeze(b"r_c")?;
 
-    let _claim_phase2_var =
+    let pre_claim_phase2_var =
     r_A_var * Az_claim_var.get_value().unwrap() +
     r_B_var * Bz_claim_var.get_value().unwrap() +
     r_C_var * Cz_claim_var.get_value().unwrap();
-  
+
+    let claim_phase2_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(pre_claim_phase2_var))?;
+
+    //&poly_sc2_vars
+    let result2 = self.sc_phase2.verify_sumcheck(claim_phase2_var.get_value().unwrap(), transcript);
+    let (_claim_post_phase2_var, ry_var) = result2.map_err(|e| SynthesisError::from(e))?;
+
+    let ry_vars: Vec<_> = ry_var.iter()
+    .map(|p| {
+
+      AllocatedNum::alloc(
+          cs.namespace(|| "ry_var"),
+          || Ok(*p)
+      )
+      .expect("allocated ry_var")
+
+    })
+    .collect();
+
+    // Additional checks which will be removed
+    // when the commitment verification is done inside the circuit.
+    // (rx, ry) will also be used in the evaluation proof.
+    for (i, claimed_ry_var) in claimed_ry_vars.iter().enumerate() {
+
+      cs.enforce(
+        || "check rx",
+        |lc| lc + ry_vars[i].get_variable(), 
+        |lc| lc + claimed_ry_var.get_variable(),
+        |lc| lc + CS::one()
+      );
+    
+    }
+
     Ok(())
     
   }
