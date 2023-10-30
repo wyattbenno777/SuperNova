@@ -206,7 +206,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(G::Scalar::ZERO))?;
 
     let result = self.sc_phase1.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
-    let (_claim_post_phase1_var, rx_var) = result.map_err(|e| SynthesisError::from(e))?;
+    let (claim_post_phase1_var, rx_var) = result.map_err(|e| SynthesisError::from(e))?;
 
     let rx_vars: Vec<_> = rx_var.iter()
     .map(|p| {
@@ -235,12 +235,12 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 
     let (Az_claim, Bz_claim, Cz_claim, prod_Az_Bz_claims) = self.claims_phase2;
 
-    let _Az_claim_var = AllocatedNum::alloc(
+    let Az_claim_var = AllocatedNum::alloc(
       cs.namespace(|| "Az_claim_var"), 
       || Ok(Az_claim)
     )?;
 
-    let _Bz_claim_var = AllocatedNum::alloc(
+    let Bz_claim_var = AllocatedNum::alloc(
       cs.namespace(|| "Bz_claim_var"), 
       || Ok(Bz_claim)
     )?;
@@ -298,8 +298,34 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
       taus_bound_rx_var *= p_var_value;
     }
     
-    let _expected_claim_post_phase1_var =
+    let pre_expected_claim_post_phase1_var =
     (prod_Az_Bz_claim_var.get_value().unwrap() - Cz_claim_var.get_value().unwrap())* taus_bound_rx_var;
+
+    let expected_claim_post_phase1_var = AllocatedNum::alloc(
+      cs.namespace(|| "expected_claim_post_phase1_var"), 
+      || Ok(pre_expected_claim_post_phase1_var)
+    )?;
+
+    let test_claim_post_phase1_var = AllocatedNum::alloc(
+      cs.namespace(|| "claim_post_phase1_var"), 
+      || Ok(claim_post_phase1_var)
+    )?;
+
+    cs.enforce(
+      || "enforce claims are equal",
+      |lc| lc + test_claim_post_phase1_var.get_variable(), 
+      |lc| lc + expected_claim_post_phase1_var.get_variable(),
+      |lc| lc
+    );
+
+    let r_A_var = transcript.squeeze(b"r_A")?;
+    let r_B_var = transcript.squeeze(b"r_B")?;
+    let r_C_var = transcript.squeeze(b"r_c")?;
+
+    let _claim_phase2_var =
+    r_A_var * Az_claim_var.get_value().unwrap() +
+    r_B_var * Bz_claim_var.get_value().unwrap() +
+    r_C_var * Cz_claim_var.get_value().unwrap();
   
     Ok(())
     
