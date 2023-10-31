@@ -331,7 +331,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 
     //&poly_sc2_vars
     let result2 = self.sc_phase2.verify_sumcheck(claim_phase2_var.get_value().unwrap(), transcript);
-    let (_claim_post_phase2_var, ry_var) = result2.map_err(|e| SynthesisError::from(e))?;
+    let (claim_post_phase2_var, ry_var) = result2.map_err(|e| SynthesisError::from(e))?;
 
     let ry_vars: Vec<_> = ry_var.iter()
     .map(|p| {
@@ -358,6 +358,63 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
       );
     
     }
+
+    //let _input_as_sparse_poly_var = SparsePolynomial::new(Ok(&self.input_as_sparse_poly));
+    let poly_input_eval_var = self.input_as_sparse_poly.evaluate(&ry_var[1..]);
+
+    let eval_vars_at_ry_var = AllocatedNum::alloc_input(
+      cs.namespace(|| "eval_vars_at_ry_var"), || Ok(self.eval_vars_at_ry)
+    )?;
+
+    let eval_Z_at_ry_var =
+    (one - ry_var[0]) * eval_vars_at_ry_var.get_value().unwrap() + ry_var[0] * poly_input_eval_var;
+
+    let (eval_A_r, eval_B_r, eval_C_r) = self.evals;
+
+    let eval_A_r_var = AllocatedNum::alloc_input(
+      cs.namespace(|| "eval_A_r_var"), || Ok(eval_A_r)
+    )?;
+    let eval_B_r_var = AllocatedNum::alloc_input(
+      cs.namespace(|| "eval_B_r_var"), || Ok(eval_B_r)
+    )?;
+    let eval_C_r_var = AllocatedNum::alloc_input(
+      cs.namespace(|| "eval_C_r_var"), || Ok(eval_C_r)
+    )?;
+
+    let scalar_var = r_A_var * eval_A_r_var.get_value().unwrap() +
+    r_B_var * eval_B_r_var.get_value().unwrap() + 
+    r_C_var * eval_C_r_var.get_value().unwrap();
+
+    let expected_claim_post_phase2_var = eval_Z_at_ry_var * scalar_var;
+
+    let fin_claim_post_phase2_var = AllocatedNum::alloc(
+      cs.namespace(|| "claim_post_phase2_var"), || Ok(claim_post_phase2_var)
+    )?;
+
+    let fin_expected_claim_post_phase2_var = AllocatedNum::alloc(
+      cs.namespace(|| "expected_claim_post_phase2_var"), || Ok(expected_claim_post_phase2_var)
+    )?;
+
+    cs.enforce(
+      || "check claims",
+      |lc| lc + fin_claim_post_phase2_var.get_variable(), 
+      |lc| lc + fin_expected_claim_post_phase2_var.get_variable(),
+      |lc| lc + CS::one()
+    );
+
+    let expected_transcript_state_var = AllocatedNum::alloc(
+      cs.namespace(|| "expected_claim_post_phase2_var"), || Ok(transcript.squeeze(b"fin")?)
+    )?;
+    let claimed_transcript_state_var = AllocatedNum::alloc_input(
+      cs.namespace(|| "claimed_transcript_state_var"), || Ok(self.claimed_transcript_sat_state)
+    )?;
+
+    cs.enforce(
+      || "check transcripts",
+      |lc| lc + expected_transcript_state_var.get_variable(), 
+      |lc| lc + claimed_transcript_state_var.get_variable(),
+      |lc| lc + CS::one()
+    );
 
     Ok(())
     
