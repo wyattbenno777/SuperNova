@@ -15,10 +15,48 @@ use crate::spartan::math::Math;
 
 use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_to_num};
 
-/// There are three main phases of Lasso verification
-// 1. Primary Sumcheck
-// 2. CombineTableEval proof.
-// 3. Memory check that uses an adapted GKR protocol.
+/* There are three main phases of Lasso verification
+ Lasso's goal is to prove an opening of the Sparse Matrix Polynomial.
+ It does it with:
+
+ 1. A primary sum-check.
+    M (Indices) . T (Table) = A (lookup results) 
+    Check the correctness of A using sum-check.
+
+    P: But M is too big.
+    A: turn M into EQ(j,r) . T[NZ_(j)] = A(r)
+     EQ(x, e) = (1 if x = e; 0 otherwise.) eq is an MLE.
+
+    P: T might still be too big.
+    A: Decompoise T into subtables.
+    EQ(j,r) . g(T[NZ_i(j)]...) = a(r)
+
+    NZ_i[J] are turned into MLE DIM_i(j)
+    Which is then turned into polynomial
+    E_i(j)
+
+ 2. (Combined eval proof for E_i(r_z)). 
+    E_i = values read from subtable.
+    r_z chosen by veritfier over sum-check
+    via (DotProductProof).
+
+    dot(x, y) = Σ xi * yi
+    Prover convinces Verifier that it knows two vectors x and y,
+    for public value v.
+    r is where the poly is evaluated.
+    let eq = EqPolynomial::new(r.to_vec());
+    let (L, R) = eq.compute_factored_evals();
+    L and R are x and y in the dot product.
+
+ 3. Memory check that uses an adapted GKR protocol.
+    P: How do we know that E_i encodes the value reads from Ti.
+    A: Use memory checking on E_i/T_i/DIM_i
+
+    Checks E_i, counter_polynomials (read, final), dim_i (chuncked lookup indices)
+    Commits to values that make up most of the layers. 
+    Does tha13 for values near inputs (most of the gates).
+*/
+
 
 /// Circuit gadget that implements the sumcheck verifier
 #[derive(Clone)]
