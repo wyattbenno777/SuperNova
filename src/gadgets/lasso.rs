@@ -11,7 +11,6 @@ use ff::{Field};
 use crate::spartan::sumcheck::{CompressedUniPoly};
 use crate::spartan::polynomial::SparsePolynomial;
 use crate::errors::NovaError;
-use crate::spartan::math::Math;
 
 use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_to_num};
 
@@ -60,14 +59,14 @@ use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_
 
 /// Circuit gadget that implements the sumcheck verifier
 #[derive(Clone)]
-pub struct SumcheckVerificationCircuit<G: Group> {
+pub struct LassoVerificationCircuit<G: Group> {
   pub compressed_polys: Vec<CompressedUniPoly<G::Scalar>>,
   pub num_rounds: usize,
   pub degree_bound: usize,
 }
 
 #[allow(unused)]
-impl<G: Group> SumcheckVerificationCircuit<G> {
+impl<G: Group> LassoVerificationCircuit<G> {
   fn verify_sumcheck(
     &self,
     claim: G::Scalar,
@@ -83,10 +82,14 @@ impl<G: Group> SumcheckVerificationCircuit<G> {
 
       // Check degree bound
       assert_eq!(poly.degree(), self.degree_bound);
+
+      // poly(0) + poly(1) = e does not need to be checked as it is checked in decompress.
       debug_assert_eq!(poly.eval_at_zero() + poly.eval_at_one(), e);
 
+      // append the prover's message to the transcript
       transcript.absorb(b"p", &poly);
 
+      // derive the verifier's challenge for the next round
       let r_i = transcript.squeeze(b"c")?;
 
       r.push(r_i);
@@ -106,23 +109,19 @@ impl From<NovaError> for SynthesisError {
 }
 
 #[derive(Clone)]
-pub struct PrimarySumcheckR1CSCircuit<G: Group> {
+pub struct LassoCircuit<G: Group> {
   pub num_cons: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
   pub prev_challenge: G::Scalar,
-  pub claims_phase2: (G::Scalar, G::Scalar, G::Scalar, G::Scalar),
-  pub eval_vars_at_ry: G::Scalar,
-  pub sc_phase1: SumcheckVerificationCircuit<G>,
-  pub sc_phase2: SumcheckVerificationCircuit<G>,
+  pub sc_phase1: LassoVerificationCircuit<G>,
   // The points at which the polynomial was evaluated by the prover.
-  pub claimed_rx: Vec<G::Scalar>,
-  pub claimed_ry: Vec<G::Scalar>,
+  pub claimed_rz: Vec<G::Scalar>,
   pub claimed_transcript_sat_state: G::Scalar,
 }
 
-impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
+impl<G: Group> LassoCircuit<G> {
   #[allow(unused)]
   pub fn new(config: &VerifierConfig<G>) -> Self {
     Self {
@@ -131,20 +130,12 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
       input_as_sparse_poly: config.input_as_sparse_poly.clone(),
       evals: config.evals,
       prev_challenge: config.prev_challenge,
-      claims_phase2: config.claims_phase2,
-      eval_vars_at_ry: config.eval_vars_at_ry,
-      sc_phase1: SumcheckVerificationCircuit {
+      sc_phase1: LassoVerificationCircuit {
         compressed_polys: config.polys_sc1.clone(),
         num_rounds: config.num_rounds,
         degree_bound: config.degree_bound,
       },
-      sc_phase2: SumcheckVerificationCircuit {
-        compressed_polys: config.polys_sc2.clone(),
-        num_rounds: config.num_rounds,
-        degree_bound: config.degree_bound,
-      },
-      claimed_rx: config.rx.clone(),
-      claimed_ry: config.ry.clone(),
+      claimed_rz: config.rz.clone(),
       claimed_transcript_sat_state: config.transcript_sat_state,
     }
   }
@@ -166,7 +157,7 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
 
     transcript.absorb(b"initial_challenge_var", &initial_challenge_var.get_value().unwrap());
      
-    //allocate poly witness for sum-check round1
+    //allocate poly witness for sum-check
     let _poly_sc1_vars: Vec<_> = self.sc_phase1.compressed_polys.iter()
       .map(|p| {
   
@@ -177,23 +168,6 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
              || Ok(coeff)
           )
           .expect("allocated coeff")
-        })
-        .collect::<Vec<_>>() 
-  
-      })
-      .collect();
-
-    //allocate poly witness for sum-check round2
-    let _poly_sc2_vars: Vec<_> = self.sc_phase2.compressed_polys.iter()
-      .map(|p| {
-  
-        let poly = p.decompress(&initial_challenge);
-        poly.coeffs.into_iter().map(|coeff| {
-          AllocatedNum::alloc(
-             cs.namespace(|| "poly_coeff2"),
-             || Ok(coeff)
-          )
-          .expect("allocated coeff2")
         })
         .collect::<Vec<_>>() 
   
@@ -215,28 +189,15 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     })
     .collect();
 
-    //allocate prover evals x
-    let claimed_rx_vars: Vec<_> = self.claimed_rx.iter()
+    //allocate prover evals z
+    let claimed_rz_vars: Vec<_> = self.claimed_rz.iter()
     .map(|p| {
 
       AllocatedNum::alloc_input(
-          cs.namespace(|| "claimed_rx"),
+          cs.namespace(|| "claimed_rz"),
           || Ok(*p)
       )
-      .expect("allocated claimed_rx")
-
-    })
-    .collect();
-
-    //allocate prover evals y
-    let claimed_ry_vars: Vec<_> = self.claimed_ry.iter()
-    .map(|p| {
-
-      AllocatedNum::alloc_input(
-          cs.namespace(|| "claimed_ry"),
-          || Ok(*p)
-      )
-      .expect("allocated claimed_ry")
+      .expect("allocated claimed_rz")
 
     })
     .collect();
@@ -244,201 +205,32 @@ impl<G: Group> PrimarySumcheckR1CSCircuit<G> {
     let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(G::Scalar::ZERO))?;
 
     let result = self.sc_phase1.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
-    let (claim_post_phase1_var, rx_var) = result.map_err(|e| SynthesisError::from(e))?;
+    let (_claim_last, rz) = result.map_err(|e| SynthesisError::from(e))?;
 
-    let rx_vars: Vec<_> = rx_var.iter()
+    let rz_vars: Vec<_> = rz.iter()
     .map(|p| {
 
       AllocatedNum::alloc(
-          cs.namespace(|| "rx_var"),
+          cs.namespace(|| "rz_vars"),
           || Ok(*p)
       )
-      .expect("allocated rx_var")
+      .expect("allocated rz_vars")
 
     })
     .collect();
 
     // Constraints ensure that this is indeed the result from the first
-    // round of sumcheck; (rx, ry) is sent to the verifier for the evaluation proof.
-    for (i, claimed_rx_var) in claimed_rx_vars.iter().enumerate() {
+    // round of sumcheck; rz is sent to the verifier for the evaluation proof.
+    for (i, claimed_rz_var) in claimed_rz_vars.iter().enumerate() {
 
       cs.enforce(
         || "check rx",
-        |lc| lc + rx_vars[i].get_variable(), 
-        |lc| lc + claimed_rx_var.get_variable(),
+        |lc| lc + rz_vars[i].get_variable(), 
+        |lc| lc + claimed_rz_var.get_variable(),
         |lc| lc + CS::one()
       );
     
     }
-
-    let (Az_claim, Bz_claim, Cz_claim, prod_Az_Bz_claims) = self.claims_phase2;
-
-    let Az_claim_var = AllocatedNum::alloc(
-      cs.namespace(|| "Az_claim_var"), 
-      || Ok(Az_claim)
-    )?;
-
-    let Bz_claim_var = AllocatedNum::alloc(
-      cs.namespace(|| "Bz_claim_var"), 
-      || Ok(Bz_claim)
-    )?;
-
-    let Cz_claim_var = AllocatedNum::alloc(
-      cs.namespace(|| "Cz_claim_var"), 
-      || Ok(Cz_claim)
-    )?;
-
-    let prod_Az_Bz_claim_var = AllocatedNum::alloc(
-      cs.namespace(|| "prod_Az_Bz_claim_var"), 
-      || Ok(prod_Az_Bz_claims)
-    )?;
-
-    let one = G::Scalar::ONE;
-    let num_rounds_x = self.num_cons.log_2();
-    let tau_vars: Vec<_> = (0..num_rounds_x)
-    .map(|_| {
-
-      let rand = match transcript.squeeze(b"tau") {
-        Ok(r) => r,
-        Err(e) => return Err(e),
-      };
-
-      Ok(AllocatedNum::alloc(
-          cs.namespace(|| "num_rounds_x"),
-          || Ok(rand)
-      )
-      .expect("allocated num_rounds_xr"))
-
-    })
-    .collect();
-
-    let prod_vars: Vec<_> = (0..rx_var.len())
-    .map(|i| {
-      let tau_i = tau_vars[i].clone();
-
-      let tau_value = match tau_i {
-        Ok(v) => v.get_value().unwrap(),
-        Err(e) => return Err(e), 
-      };
-
-      Ok((rx_var[i] * tau_value) +
-      (one - rx_var[i]) * (one - tau_value))
-    }).collect();
-
-    let mut taus_bound_rx_var = G::Scalar::ONE;
-
-    for p_var in prod_vars.iter() {
-      let temp = G::Scalar::ONE;
-      let p_var_value = match p_var {
-        Ok(v) => v,
-        Err(_) => &temp, 
-      };
-      taus_bound_rx_var *= p_var_value;
-    }
-    
-    let pre_expected_claim_post_phase1_var =
-    (prod_Az_Bz_claim_var.get_value().unwrap() - Cz_claim_var.get_value().unwrap())* taus_bound_rx_var;
-
-    let expected_claim_post_phase1_var = AllocatedNum::alloc(
-      cs.namespace(|| "expected_claim_post_phase1_var"), 
-      || Ok(pre_expected_claim_post_phase1_var)
-    )?;
-
-    let test_claim_post_phase1_var = AllocatedNum::alloc(
-      cs.namespace(|| "claim_post_phase1_var"), 
-      || Ok(claim_post_phase1_var)
-    )?;
-
-    cs.enforce(
-      || "enforce claims are equal",
-      |lc| lc + test_claim_post_phase1_var.get_variable(), 
-      |lc| lc + expected_claim_post_phase1_var.get_variable(),
-      |lc| lc
-    );
-
-    let r_A_var = transcript.squeeze(b"r_A")?;
-    let r_B_var = transcript.squeeze(b"r_B")?;
-    let r_C_var = transcript.squeeze(b"r_c")?;
-
-    let pre_claim_phase2_var =
-    r_A_var * Az_claim_var.get_value().unwrap() +
-    r_B_var * Bz_claim_var.get_value().unwrap() +
-    r_C_var * Cz_claim_var.get_value().unwrap();
-
-    let claim_phase2_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(pre_claim_phase2_var))?;
-
-    //&poly_sc2_vars
-    let result2 = self.sc_phase2.verify_sumcheck(claim_phase2_var.get_value().unwrap(), transcript);
-    let (claim_post_phase2_var, ry_var) = result2.map_err(|e| SynthesisError::from(e))?;
-
-    let ry_vars: Vec<_> = ry_var.iter()
-    .map(|p| {
-
-      AllocatedNum::alloc(
-          cs.namespace(|| "ry_var"),
-          || Ok(*p)
-      )
-      .expect("allocated ry_var")
-
-    })
-    .collect();
-
-    // Additional checks which will be removed
-    // when the commitment verification is done inside the circuit.
-    // (rx, ry) will also be used in the evaluation proof.
-    for (i, claimed_ry_var) in claimed_ry_vars.iter().enumerate() {
-
-      cs.enforce(
-        || "check rx",
-        |lc| lc + ry_vars[i].get_variable(), 
-        |lc| lc + claimed_ry_var.get_variable(),
-        |lc| lc + CS::one()
-      );
-    
-    }
-
-    //let _input_as_sparse_poly_var = SparsePolynomial::new(Ok(&self.input_as_sparse_poly));
-    let poly_input_eval_var = self.input_as_sparse_poly.evaluate(&ry_var[1..]);
-
-    let eval_vars_at_ry_var = AllocatedNum::alloc_input(
-      cs.namespace(|| "eval_vars_at_ry_var"), || Ok(self.eval_vars_at_ry)
-    )?;
-
-    let eval_Z_at_ry_var =
-    (one - ry_var[0]) * eval_vars_at_ry_var.get_value().unwrap() + ry_var[0] * poly_input_eval_var;
-
-    let (eval_A_r, eval_B_r, eval_C_r) = self.evals;
-
-    let eval_A_r_var = AllocatedNum::alloc_input(
-      cs.namespace(|| "eval_A_r_var"), || Ok(eval_A_r)
-    )?;
-    let eval_B_r_var = AllocatedNum::alloc_input(
-      cs.namespace(|| "eval_B_r_var"), || Ok(eval_B_r)
-    )?;
-    let eval_C_r_var = AllocatedNum::alloc_input(
-      cs.namespace(|| "eval_C_r_var"), || Ok(eval_C_r)
-    )?;
-
-    let scalar_var = r_A_var * eval_A_r_var.get_value().unwrap() +
-    r_B_var * eval_B_r_var.get_value().unwrap() + 
-    r_C_var * eval_C_r_var.get_value().unwrap();
-
-    let expected_claim_post_phase2_var = eval_Z_at_ry_var * scalar_var;
-
-    let fin_claim_post_phase2_var = AllocatedNum::alloc(
-      cs.namespace(|| "claim_post_phase2_var"), || Ok(claim_post_phase2_var)
-    )?;
-
-    let fin_expected_claim_post_phase2_var = AllocatedNum::alloc(
-      cs.namespace(|| "expected_claim_post_phase2_var"), || Ok(expected_claim_post_phase2_var)
-    )?;
-
-    cs.enforce(
-      || "check claims",
-      |lc| lc + fin_claim_post_phase2_var.get_variable(), 
-      |lc| lc + fin_expected_claim_post_phase2_var.get_variable(),
-      |lc| lc + CS::one()
-    );
 
     let expected_transcript_state_var = AllocatedNum::alloc(
       cs.namespace(|| "expected_claim_post_phase2_var"), || Ok(transcript.squeeze(b"fin")?)
@@ -468,17 +260,8 @@ pub struct VerifierConfig<G: Group> {
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
   pub prev_challenge: G::Scalar,
-  pub claims_phase2: (
-    G::Scalar,
-    G::Scalar,
-    G::Scalar,
-    G::Scalar,
-  ),
-  pub eval_vars_at_ry: G::Scalar,
   pub polys_sc1: Vec<CompressedUniPoly<G::Scalar>>,
-  pub polys_sc2: Vec<CompressedUniPoly<G::Scalar>>,
-  pub rx: Vec<G::Scalar>,
-  pub ry: Vec<G::Scalar>,
+  pub rz: Vec<G::Scalar>,
   pub transcript_sat_state: G::Scalar,
 }
 
