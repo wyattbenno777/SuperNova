@@ -9,7 +9,7 @@ use crate::traits::{ROCircuitTrait, TranscriptEngineTrait};
 use crate::traits::{Group, ROConstantsCircuit};
 use ff::{Field};
 use crate::spartan::sumcheck::{CompressedUniPoly};
-use crate::spartan::polynomial::SparsePolynomial;
+use crate::spartan::polynomial::{EqPolynomial, SparsePolynomial};
 use crate::errors::NovaError;
 
 use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_to_num};
@@ -63,6 +63,7 @@ pub struct PrimarySumcheck<G: Group> {
   pub compressed_polys: Vec<CompressedUniPoly<G::Scalar>>,
   pub num_rounds: usize,
   pub degree_bound: usize,
+  //pub proof_derefs: CombinedTableEvalProof<G>,
 }
 
 #[allow(unused)]
@@ -146,7 +147,7 @@ impl<G: Group> PolyCommitment<G> {
 pub struct SparsePolynomialCommitment<G: Group> {
   pub l_variate_polys_commitment: PolyCommitment<G>,
   pub log_m_variate_polys_commitment: PolyCommitment<G>,
-  pub s: usize, // sparsity
+  pub sparsity: usize,
   pub log_m: usize,
   pub m: usize,
 }
@@ -189,7 +190,7 @@ impl<G: Group> SparsePolynomialCommitment<G> {
     .collect();
 
     let alloc_s = AllocatedNum::alloc_input(
-      cs.namespace(|| "alloc s"), || Ok(G::Scalar::from(self.s.try_into().unwrap()))
+      cs.namespace(|| "alloc sparsity"), || Ok(G::Scalar::from(self.sparsity.try_into().unwrap()))
    )?;
     let alloc_log_m = AllocatedNum::alloc_input(
       cs.namespace(|| "alloc log_m"), || Ok(G::Scalar::from(self.log_m.try_into().unwrap()))
@@ -198,7 +199,7 @@ impl<G: Group> SparsePolynomialCommitment<G> {
       cs.namespace(|| "alloc m"), || Ok(G::Scalar::from(self.m.try_into().unwrap()))
    )?;
 
-    transcript.absorb(b"s", &alloc_s.get_value().unwrap());
+    transcript.absorb(b"sparsity", &alloc_s.get_value().unwrap());
     transcript.absorb(b"log_m", &alloc_log_m.get_value().unwrap());
     transcript.absorb(b"m", &alloc_m.get_value().unwrap());
 
@@ -206,19 +207,24 @@ impl<G: Group> SparsePolynomialCommitment<G> {
   }
 }
 
-
+/*#[derive(Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct PolyEvalProof<G: CurveGroup> {
+  proof: DotProductProofLog<G>,
+}*/
 
 #[derive(Clone)]
 pub struct LassoCircuit<G: Group> {
   pub num_cons: usize,
+  pub commitment: SparsePolynomialCommitment<G>,
   pub comm_derefs: PolyCommitment<G>,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
-  pub evals: (G::Scalar, G::Scalar, G::Scalar),
   pub claimed_evaluation: G::Scalar,
+  pub subtable_eval_deref: G::Scalar,
   pub primary_sumcheck: PrimarySumcheck<G>,
   // The random points at which the polynomial was evaluated, commited to for the eval checks.
   pub claimed_rz: Vec<G::Scalar>,
+  pub eq_randomness: Vec<G::Scalar>,
   pub claimed_transcript_sat_state: G::Scalar,
 }
 
@@ -227,19 +233,28 @@ impl<G: Group> LassoCircuit<G> {
   pub fn new(config: &VerifierConfig<G>) -> Self {
     Self {
       num_cons: config.num_cons.clone(),
+      commitment: 
+        SparsePolynomialCommitment { 
+          l_variate_polys_commitment: config.commitment.l_variate_polys_commitment.clone(),
+          log_m_variate_polys_commitment: config.commitment.log_m_variate_polys_commitment.clone(),
+          sparsity: config.commitment.sparsity,
+          log_m: config.commitment.log_m,
+          m: config.commitment.m,
+      },
       comm_derefs: PolyCommitment { 
         poly: config.comm_derefs.poly.clone(),
       },
       input: config.input.clone(),
       input_as_sparse_poly: config.input_as_sparse_poly.clone(),
-      evals: config.evals,
       claimed_evaluation: config.claimed_evaluation,
+      subtable_eval_deref: config.subtable_eval_deref,
       primary_sumcheck: PrimarySumcheck {
         compressed_polys: config.polys_sc1.clone(),
         num_rounds: config.num_rounds,
         degree_bound: config.degree_bound,
       },
       claimed_rz: config.rz.clone(),
+      eq_randomness: config.eq_randomness.clone(),
       claimed_transcript_sat_state: config.transcript_sat_state,
     }
   }
@@ -256,7 +271,7 @@ impl<G: Group> LassoCircuit<G> {
     //START 1. Combined eval proof.
 
     // Allocate inputs. Non-deterministic choices of the prover (comm_derefs)
-    // CombinedTableCommitment in Lasso is just a PolyComm.
+    // CombinedTableCommitment in Lasso is a PolyComm.
     let _commitments = self.comm_derefs.commit(cs, transcript);
 
     let _input_vars: Vec<_> = self.input.iter()
@@ -314,11 +329,10 @@ impl<G: Group> LassoCircuit<G> {
     })
     .collect();
 
-    // claimed_evaluation instead of G::Scalar::ZERO
     let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(initial_challenge))?;
 
     let result = self.primary_sumcheck.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
-    let (_claim_last, rz) = result.map_err(|e| SynthesisError::from(e))?;
+    let (claim_last, rz) = result.map_err(|e| SynthesisError::from(e))?;
 
     let rz_vars: Vec<_> = rz.iter()
     .map(|p| {
@@ -332,8 +346,9 @@ impl<G: Group> LassoCircuit<G> {
     })
     .collect();
 
-    // Constraints ensure that this is indeed the result from the first
-    // round of sumcheck; rz is sent to the verifier for the evaluation proof.
+
+    // Constraints ensure that this is indeed the result from
+    // the round of sumcheck.
     for (i, claimed_rz_var) in claimed_rz_vars.iter().enumerate() {
 
       cs.enforce(
@@ -345,7 +360,47 @@ impl<G: Group> LassoCircuit<G> {
     
     }
 
-    // END Primary Sum-check
+      // Verify that eq(r, r_z) * g(E_1(r_z) * ... * E_c(r_z)) = claim_last
+      let eq_eval = EqPolynomial::new(self.eq_randomness.clone()).evaluate(&rz);
+      assert_eq!(
+        eq_eval * self.subtable_eval_deref, // combine_lookups function result is given as input (eval_derefs).
+        claim_last,
+        "Primary sumcheck check failed."
+      );
+
+      let _comm_eq_eval = AllocatedNum::alloc(
+        cs.namespace(|| "comm eq_eval"), || Ok(eq_eval)
+    )?;
+
+      let _comm_subtable_eval_deref = AllocatedNum::alloc_input(
+        cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(self.subtable_eval_deref)
+    )?;
+    
+      let comm_eq_equal = AllocatedNum::alloc(
+        cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(eq_eval * self.subtable_eval_deref)
+    )?;
+
+      let comm_claim_last = AllocatedNum::alloc(
+        cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(claim_last)
+    )?;
+
+    cs.enforce(
+      || "verify eq",
+      |lc| lc + comm_claim_last.get_variable(), 
+      |lc| lc + comm_eq_equal.get_variable(),
+      |lc| lc + CS::one()
+    );
+
+    // END Primary Sum-check CONTINUE EVAL PROOF
+
+    self.primary_sumcheck.proof_derefs.verify(
+      &rz,
+      &self.subtable_eval_deref,
+      &gens.gens_derefs,
+      &self.comm_derefs,
+      transcript,
+    )?;
+
 
     // 3. START MEM-CHECK
 
@@ -372,15 +427,22 @@ impl<G: Group> LassoCircuit<G> {
 pub struct VerifierConfig<G: Group> {
   pub num_rounds: usize,
   pub num_cons: usize,
+  pub commitment: SparsePolynomialCommitment<G>,
   pub comm_derefs: PolyCommitment<G>,
   pub degree_bound: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
-  pub evals: (G::Scalar, G::Scalar, G::Scalar),
   pub claimed_evaluation: G::Scalar,
+  pub subtable_eval_deref: G::Scalar,
   pub polys_sc1: Vec<CompressedUniPoly<G::Scalar>>,
   pub rz: Vec<G::Scalar>,
+  pub eq_randomness: Vec<G::Scalar>,
   pub transcript_sat_state: G::Scalar,
+  pub log_m_variate_polys_commitment: PolyCommitment<G>,
+  pub l_variate_polys_commitment: PolyCommitment<G>,
+  pub sparsity: usize,
+  pub log_m: usize,
+  pub s: usize,
 }
 
 /// rw trace
