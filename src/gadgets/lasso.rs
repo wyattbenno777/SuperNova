@@ -59,14 +59,14 @@ use super::utils::{add_allocated_num, alloc_one, conditionally_select2, le_bits_
 
 /// Circuit gadget that implements the sumcheck verifier
 #[derive(Clone)]
-pub struct LassoVerificationCircuit<G: Group> {
+pub struct PrimarySumcheck<G: Group> {
   pub compressed_polys: Vec<CompressedUniPoly<G::Scalar>>,
   pub num_rounds: usize,
   pub degree_bound: usize,
 }
 
 #[allow(unused)]
-impl<G: Group> LassoVerificationCircuit<G> {
+impl<G: Group> PrimarySumcheck<G> {
   fn verify_sumcheck(
     &self,
     claim: G::Scalar,
@@ -108,15 +108,116 @@ impl From<NovaError> for SynthesisError {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct PolyCommitment<G: Group> {
+  poly: Vec<G::Scalar>,
+}
+
+#[allow(unused)]
+impl<G: Group> PolyCommitment<G> {
+  fn commit<CS: ConstraintSystem<G::Scalar>>(
+    self,
+    cs: &mut CS,
+    transcript: &mut G::TE   
+  ) -> Result<
+    (),
+    SynthesisError
+  > {
+
+    let _commitments: Vec<_> = self.poly.iter()
+    .map(|p| {
+
+      transcript.absorb(b"alloc C", p);
+
+      AllocatedNum::alloc(
+          cs.namespace(|| "poly commit"),
+          || Ok(*p)
+      )
+      .expect("allocated comm C")
+
+    })
+    .collect();
+
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct SparsePolynomialCommitment<G: Group> {
+  pub l_variate_polys_commitment: PolyCommitment<G>,
+  pub log_m_variate_polys_commitment: PolyCommitment<G>,
+  pub s: usize, // sparsity
+  pub log_m: usize,
+  pub m: usize,
+}
+
+#[allow(unused)]
+impl<G: Group> SparsePolynomialCommitment<G> {
+  fn commit<CS: ConstraintSystem<G::Scalar>>(
+    self,
+    cs: &mut CS,
+    transcript: &mut G::TE   
+  ) -> Result<
+    (),
+    SynthesisError
+  > {
+
+    let _commitments_l_v: Vec<_> = self.l_variate_polys_commitment.poly.iter()
+    .map(|p| {
+      transcript.absorb(b"alloc l_variate_polys_commitment", p);
+
+      AllocatedNum::alloc_input(
+          cs.namespace(|| "l_variate_polys_commitment"),
+          || Ok(*p)
+      )
+      .expect("allocated l_variate_polys_commitment")
+
+    })
+    .collect();
+
+    let _commitments_log_m: Vec<_> = self.log_m_variate_polys_commitment.poly.iter()
+    .map(|p| {
+      transcript.absorb(b"alloc log_m_variate_polys_commitment", p);
+      
+      AllocatedNum::alloc_input(
+        cs.namespace(|| "l_variate_polys_commitment"),
+          || Ok(*p)
+      )
+      .expect("allocated l_variate_polys_commitment")
+
+    })
+    .collect();
+
+    let alloc_s = AllocatedNum::alloc_input(
+      cs.namespace(|| "alloc s"), || Ok(G::Scalar::from(self.s.try_into().unwrap()))
+   )?;
+    let alloc_log_m = AllocatedNum::alloc_input(
+      cs.namespace(|| "alloc log_m"), || Ok(G::Scalar::from(self.log_m.try_into().unwrap()))
+   )?;
+    let alloc_m = AllocatedNum::alloc_input(
+      cs.namespace(|| "alloc m"), || Ok(G::Scalar::from(self.m.try_into().unwrap()))
+   )?;
+
+    transcript.absorb(b"s", &alloc_s.get_value().unwrap());
+    transcript.absorb(b"log_m", &alloc_log_m.get_value().unwrap());
+    transcript.absorb(b"m", &alloc_m.get_value().unwrap());
+
+    Ok(())
+  }
+}
+
+
+
 #[derive(Clone)]
 pub struct LassoCircuit<G: Group> {
   pub num_cons: usize,
+  pub comm_derefs: PolyCommitment<G>,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
-  pub prev_challenge: G::Scalar,
-  pub sc_phase1: LassoVerificationCircuit<G>,
-  // The points at which the polynomial was evaluated by the prover.
+  pub claimed_evaluation: G::Scalar,
+  pub primary_sumcheck: PrimarySumcheck<G>,
+  // The random points at which the polynomial was evaluated, commited to for the eval checks.
   pub claimed_rz: Vec<G::Scalar>,
   pub claimed_transcript_sat_state: G::Scalar,
 }
@@ -126,11 +227,14 @@ impl<G: Group> LassoCircuit<G> {
   pub fn new(config: &VerifierConfig<G>) -> Self {
     Self {
       num_cons: config.num_cons.clone(),
+      comm_derefs: PolyCommitment { 
+        poly: config.comm_derefs.poly.clone(),
+      },
       input: config.input.clone(),
       input_as_sparse_poly: config.input_as_sparse_poly.clone(),
       evals: config.evals,
-      prev_challenge: config.prev_challenge,
-      sc_phase1: LassoVerificationCircuit {
+      claimed_evaluation: config.claimed_evaluation,
+      primary_sumcheck: PrimarySumcheck {
         compressed_polys: config.polys_sc1.clone(),
         num_rounds: config.num_rounds,
         degree_bound: config.degree_bound,
@@ -148,9 +252,32 @@ impl<G: Group> LassoCircuit<G> {
     (),
     SynthesisError
   > {
+
+    //START 1. Combined eval proof.
+
+    // Allocate inputs. Non-deterministic choices of the prover (comm_derefs)
+    // CombinedTableCommitment in Lasso is just a PolyComm.
+    let _commitments = self.comm_derefs.commit(cs, transcript);
+
+    let _input_vars: Vec<_> = self.input.iter()
+    .map(|p| {
+
+      transcript.absorb(b"p", p);
+
+      AllocatedNum::alloc_input(
+          cs.namespace(|| "input"),
+          || Ok(*p)
+      )
+      .expect("allocated input")
+
+    })
+    .collect();
+
+
+    //START 2. Primary Sum-check
   
     //allocate input for the challange var.
-    let initial_challenge = self.prev_challenge;
+    let initial_challenge = self.claimed_evaluation;
     let initial_challenge_var = AllocatedNum::alloc_input(
        cs.namespace(|| "initial challenge"), || Ok(initial_challenge)
     )?;
@@ -158,7 +285,7 @@ impl<G: Group> LassoCircuit<G> {
     transcript.absorb(b"initial_challenge_var", &initial_challenge_var.get_value().unwrap());
      
     //allocate poly witness for sum-check
-    let _poly_sc1_vars: Vec<_> = self.sc_phase1.compressed_polys.iter()
+    let _poly_sc1_vars: Vec<_> = self.primary_sumcheck.compressed_polys.iter()
       .map(|p| {
   
         let poly = p.decompress(&initial_challenge);
@@ -174,21 +301,6 @@ impl<G: Group> LassoCircuit<G> {
       })
       .collect();
 
-    //allocate inputs
-    let _input_vars: Vec<_> = self.input.iter()
-    .map(|p| {
-
-      transcript.absorb(b"p", p);
-
-      AllocatedNum::alloc_input(
-          cs.namespace(|| "input"),
-          || Ok(*p)
-      )
-      .expect("allocated input")
-
-    })
-    .collect();
-
     //allocate prover evals z
     let claimed_rz_vars: Vec<_> = self.claimed_rz.iter()
     .map(|p| {
@@ -202,9 +314,10 @@ impl<G: Group> LassoCircuit<G> {
     })
     .collect();
 
-    let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(G::Scalar::ZERO))?;
+    // claimed_evaluation instead of G::Scalar::ZERO
+    let claim_phase1_var = AllocatedNum::alloc(cs.namespace(|| "claim_phase1_var"), || Ok(initial_challenge))?;
 
-    let result = self.sc_phase1.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
+    let result = self.primary_sumcheck.verify_sumcheck(claim_phase1_var.get_value().unwrap(), transcript);
     let (_claim_last, rz) = result.map_err(|e| SynthesisError::from(e))?;
 
     let rz_vars: Vec<_> = rz.iter()
@@ -232,6 +345,10 @@ impl<G: Group> LassoCircuit<G> {
     
     }
 
+    // END Primary Sum-check
+
+    // 3. START MEM-CHECK
+
     let expected_transcript_state_var = AllocatedNum::alloc(
       cs.namespace(|| "expected_claim_post_phase2_var"), || Ok(transcript.squeeze(b"fin")?)
     )?;
@@ -255,11 +372,12 @@ impl<G: Group> LassoCircuit<G> {
 pub struct VerifierConfig<G: Group> {
   pub num_rounds: usize,
   pub num_cons: usize,
+  pub comm_derefs: PolyCommitment<G>,
   pub degree_bound: usize,
   pub input: Vec<G::Scalar>,
   pub input_as_sparse_poly: SparsePolynomial<G::Scalar>,
   pub evals: (G::Scalar, G::Scalar, G::Scalar),
-  pub prev_challenge: G::Scalar,
+  pub claimed_evaluation: G::Scalar,
   pub polys_sc1: Vec<CompressedUniPoly<G::Scalar>>,
   pub rz: Vec<G::Scalar>,
   pub transcript_sat_state: G::Scalar,
@@ -359,7 +477,7 @@ impl<'a, G: Group> LassoTransaction<'a, G> {
     // let ro_consts1: ROConstantsCircuit<PastaG2> = PoseidonConstantsCircuit::new();
     let mut ro = G::ROCircuit::new(
       ro_const,
-      1 + 3 * self.rw_trace.len(), // prev_challenge + [(address, value, counter)]
+      1 + 3 * self.rw_trace.len(), // claimed_evaluation + [(address, value, counter)]
     );
     ro.absorb(prev_intermediate_gamma);
     let (next_R, next_W, next_rw_counter) = self.rw_trace.iter().enumerate().try_fold(
