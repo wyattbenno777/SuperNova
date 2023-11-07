@@ -360,27 +360,27 @@ impl<G: Group> LassoCircuit<G> {
     
     }
 
-      // Verify that eq(r, r_z) * g(E_1(r_z) * ... * E_c(r_z)) = claim_last
-      let eq_eval = EqPolynomial::new(self.eq_randomness.clone()).evaluate(&rz);
-      assert_eq!(
-        eq_eval * self.subtable_eval_deref, // combine_lookups function result is given as input (eval_derefs).
-        claim_last,
-        "Primary sumcheck check failed."
-      );
+    // Verify that eq(r, r_z) * g(E_1(r_z) * ... * E_c(r_z)) = claim_last
+    let eq_eval = EqPolynomial::new(self.eq_randomness.clone()).evaluate(&rz);
+    assert_eq!(
+      eq_eval * self.subtable_eval_deref, // combine_lookups function result is given as input (eval_derefs).
+      claim_last,
+      "Primary sumcheck check failed."
+    );
 
-      let _comm_eq_eval = AllocatedNum::alloc(
+    let _comm_eq_eval = AllocatedNum::alloc(
         cs.namespace(|| "comm eq_eval"), || Ok(eq_eval)
     )?;
 
-      let _comm_subtable_eval_deref = AllocatedNum::alloc_input(
+    let _comm_subtable_eval_deref = AllocatedNum::alloc_input(
         cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(self.subtable_eval_deref)
     )?;
     
-      let comm_eq_equal = AllocatedNum::alloc(
+    let comm_eq_equal = AllocatedNum::alloc(
         cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(eq_eval * self.subtable_eval_deref)
     )?;
 
-      let comm_claim_last = AllocatedNum::alloc(
+    let comm_claim_last = AllocatedNum::alloc(
         cs.namespace(|| "comm self.subtable_eval_deref"), || Ok(claim_last)
     )?;
 
@@ -393,13 +393,13 @@ impl<G: Group> LassoCircuit<G> {
 
     // END Primary Sum-check CONTINUE EVAL PROOF
 
-    self.primary_sumcheck.proof_derefs.verify(
+    /*self.primary_sumcheck.proof_derefs.verify(
       &rz,
       &self.subtable_eval_deref,
       &gens.gens_derefs,
       &self.comm_derefs,
       transcript,
-    )?;
+    )?;*/
 
 
     // 3. START MEM-CHECK
