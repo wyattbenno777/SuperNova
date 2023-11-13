@@ -6,6 +6,7 @@
 
 pub mod bn256_grumpkin;
 pub mod ipa_pc;
+pub mod hyrax_pc;
 pub mod keccak;
 pub mod pasta;
 pub mod pedersen;

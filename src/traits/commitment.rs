@@ -36,7 +36,6 @@ impl<T, Rhs, Output> CommitmentOpsOwned<Rhs, Output> for T where
 /// This trait defines the behavior of the commitment
 pub trait CommitmentTrait<G: Group>:
   Clone
-  + Copy
   + Debug
   + Default
   + PartialEq

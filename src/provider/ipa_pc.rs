@@ -129,7 +129,7 @@ pub struct InnerProductInstance<G: Group> {
 }
 
 impl<G: Group> InnerProductInstance<G> {
-  fn new(comm_a_vec: &Commitment<G>, b_vec: &[G::Scalar], c: &G::Scalar) -> Self {
+  pub fn new(comm_a_vec: &Commitment<G>, b_vec: &[G::Scalar], c: &G::Scalar) -> Self {
     InnerProductInstance {
       comm_a_vec: *comm_a_vec,
       b_vec: b_vec.to_vec(),
@@ -149,12 +149,12 @@ impl<G: Group> TranscriptReprTrait<G> for InnerProductInstance<G> {
   }
 }
 
-struct InnerProductWitness<G: Group> {
+pub struct InnerProductWitness<G: Group> {
   a_vec: Vec<G::Scalar>,
 }
 
 impl<G: Group> InnerProductWitness<G> {
-  fn new(a_vec: &[G::Scalar]) -> Self {
+  pub fn new(a_vec: &[G::Scalar]) -> Self {
     InnerProductWitness {
       a_vec: a_vec.to_vec(),
     }
@@ -164,7 +164,7 @@ impl<G: Group> InnerProductWitness<G> {
 /// An inner product argument
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-struct InnerProductArgument<G: Group> {
+pub struct InnerProductArgument<G: Group> {
   L_vec: Vec<CompressedCommitment<G>>,
   R_vec: Vec<CompressedCommitment<G>>,
   a_hat: G::Scalar,
@@ -179,7 +179,7 @@ where
     b"IPA"
   }
 
-  fn prove(
+  pub fn prove(
     ck: &CommitmentKey<G>,
     ck_c: &CommitmentKey<G>,
     U: &InnerProductInstance<G>,
@@ -291,7 +291,7 @@ where
     })
   }
 
-  fn verify(
+  pub fn verify(
     &self,
     ck: &CommitmentKey<G>,
     ck_c: &CommitmentKey<G>,
