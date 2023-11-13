@@ -116,7 +116,7 @@ pub struct PolyCommitment<G: Group> {
 
 #[allow(unused)]
 impl<G: Group> PolyCommitment<G> {
-  fn commit<CS: ConstraintSystem<G::Scalar>>(
+  fn append_to_transcript<CS: ConstraintSystem<G::Scalar>>(
     self,
     cs: &mut CS,
     transcript: &mut G::TE   
@@ -154,7 +154,7 @@ pub struct SparsePolynomialCommitment<G: Group> {
 
 #[allow(unused)]
 impl<G: Group> SparsePolynomialCommitment<G> {
-  fn commit<CS: ConstraintSystem<G::Scalar>>(
+  fn append_to_transcript<CS: ConstraintSystem<G::Scalar>>(
     self,
     cs: &mut CS,
     transcript: &mut G::TE   
@@ -206,6 +206,42 @@ impl<G: Group> SparsePolynomialCommitment<G> {
     Ok(())
   }
 }
+
+/*pub struct SparsePolyCommitmentGens<G: Group> {
+  pub gens_combined_l_variate: PolyCommitmentGens<G>,
+  pub gens_combined_log_m_variate: PolyCommitmentGens<G>,
+  pub gens_derefs: PolyCommitmentGens<G>,
+}
+
+impl<G: Group> SparsePolyCommitmentGens<G> {
+  pub fn new(
+    label: &'static [u8],
+    c: usize,
+    s: usize,
+    num_memories: usize,
+    log_m: usize,
+  ) -> SparsePolyCommitmentGens<G> {
+    // dim_1, ... dim_c, read_1, ..., read_c
+    // log_2(cs + cs)
+    let num_vars_combined_l_variate = (2 * c * s).next_power_of_two().log_2();
+    // final
+    // log_2(cm) = log_2(c) + log_2(m)
+    let num_vars_combined_log_m_variate = c.next_power_of_two().log_2() + log_m;
+    // E_1, ..., E_alpha
+    // log_2(alpha * s)
+    let num_vars_derefs = (num_memories * s).next_power_of_two().log_2();
+
+    let gens_combined_l_variate = PolyCommitmentGens::new(num_vars_combined_l_variate, label);
+    let gens_combined_log_m_variate =
+      PolyCommitmentGens::new(num_vars_combined_log_m_variate, label);
+    let gens_derefs = PolyCommitmentGens::new(num_vars_derefs, label);
+    SparsePolyCommitmentGens {
+      gens_combined_l_variate,
+      gens_combined_log_m_variate,
+      gens_derefs,
+    }
+  }
+}*/
 
 /*#[derive(Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PolyEvalProof<G: CurveGroup> {
@@ -259,6 +295,7 @@ impl<G: Group> LassoCircuit<G> {
     }
   }
 
+  #[allow(unused)]
   pub fn synthesize<CS: ConstraintSystem<G::Scalar>>(
     self,
     cs: &mut CS,
@@ -272,7 +309,7 @@ impl<G: Group> LassoCircuit<G> {
 
     // Allocate inputs. Non-deterministic choices of the prover (comm_derefs)
     // CombinedTableCommitment in Lasso is a PolyComm.
-    let _commitments = self.comm_derefs.commit(cs, transcript);
+    let _commitments = self.comm_derefs.append_to_transcript(cs, transcript);
 
     let _input_vars: Vec<_> = self.input.iter()
     .map(|p| {
