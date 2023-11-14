@@ -1,3 +1,4 @@
+//! This module is an adaptation of code from the Lasso crate.
 use digest::{ExtendableOutput, Update};
 use sha3::Shake256;
 use std::io::Read;
