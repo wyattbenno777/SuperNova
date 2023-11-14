@@ -8,6 +8,7 @@
 pub mod direct;
 pub(crate) mod math;
 pub mod polynomial;
+pub mod commitments;
 pub mod ppsnark;
 pub mod snark;
 pub mod sumcheck;
