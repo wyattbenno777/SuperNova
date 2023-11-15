@@ -2,22 +2,17 @@
 use digest::{ExtendableOutput, Update};
 use sha3::Shake256;
 use std::io::Read;
-use halo2curves::bn256::{
-  G1Affine as Bn256Affine, G1 as Bn256Point, Fr as Scalar
-};
-use halo2curves::CurveExt;
-use group::Curve;
 use crate::traits::Group;
 
 
 #[derive(Debug)]
-pub struct MultiCommitGens  {
+pub struct MultiCommitGens<G: Group>  {
   pub n: usize,
-  pub G: Vec<Bn256Affine>,
-  pub h: Bn256Affine,
+  pub G: Vec<G>,
+  pub h: G,
 }
 
-impl MultiCommitGens {
+impl<G: Group + halo2curves::CurveExt<AffineExt = G>> MultiCommitGens<G> {
   pub fn new(n: usize, label: &[u8]) -> Self {
     let mut shake = Shake256::default();
     shake.update(label);
@@ -27,7 +22,7 @@ impl MultiCommitGens {
     for _ in 0..n {
       let mut uniform_bytes = [0u8; 32];
       reader.read_exact(&mut uniform_bytes).unwrap();
-      let hash = Bn256Point::hash_to_curve("from_uniform_bytes");
+      let hash = G::hash_to_curve("from_uniform_bytes");
       gens.push(hash(&uniform_bytes).to_affine());
     }
 
@@ -64,27 +59,34 @@ impl MultiCommitGens {
   }
 }
 
-pub trait Commitments: Sized {
-  fn commit(&self, blind: &Scalar, gens_n: &MultiCommitGens) -> Bn256Point;
-  fn batch_commit(inputs: &[Self], blind: &Scalar, gens_n: &MultiCommitGens) -> Bn256Point;
+pub trait Commitments<G: Group>: Sized{
+  fn commit(&self, blind: &G::Scalar, gens_n: &MultiCommitGens<G>) -> G;
+  fn batch_commit(inputs: &[Self], blind: &G::Scalar, gens_n: &MultiCommitGens<G>) -> G;
 }
 
-impl Commitments for Scalar {
-  fn commit(&self, blind: &Scalar, gens_n: &MultiCommitGens) -> Bn256Point {
+impl<G: Group> Commitments<G> for G::Scalar
+  where
+    G: Group,
+{
+  fn commit(&self, blind: &G::Scalar, gens_n: &MultiCommitGens<G>) -> G {
     assert_eq!(gens_n.n, 1);
 
     gens_n.G[0] * self + gens_n.h * blind
   }
 
-  fn batch_commit(inputs: &[Self], blind: &Scalar, gens_n: &MultiCommitGens) -> Bn256Point {
+  fn batch_commit(inputs: &[Self], blind: &G::Scalar, gens_n: &MultiCommitGens<G>) -> G {
     assert_eq!(gens_n.n, inputs.len());
     
-    let mut bases: Vec<Bn256Affine> = gens_n.G.clone();
+    let mut bases: Vec<G> = gens_n.G.clone();
     let mut scalars = inputs.to_vec();
 
     bases.push(gens_n.h.clone());
     scalars.push(*blind);
 
-    Bn256Point::vartime_multiscalar_mul(&scalars, &bases)
+    let bases: Vec<G::PreprocessedGroupElement> = 
+    bases.iter().map(G::preprocessed).collect();
+
+
+    G::vartime_multiscalar_mul(&scalars, bases.as_slice())
   }
 }

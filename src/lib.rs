@@ -24,6 +24,7 @@ pub mod gadgets;
 pub mod provider;
 pub mod spartan;
 pub mod traits;
+pub mod subprotocols;
 
 #[cfg(feature = "supernova")]
 pub mod supernova;

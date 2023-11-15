@@ -12,10 +12,6 @@ pub mod ppsnark;
 pub mod snark;
 pub mod sumcheck;
 
-//Used in Lasso circuits.
-pub mod commitments;
-pub mod bullet;
-
 use crate::{traits::Group, Commitment};
 use ff::Field;
 use polynomial::SparsePolynomial;
