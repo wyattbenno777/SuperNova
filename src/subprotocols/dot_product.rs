@@ -305,40 +305,46 @@ impl<G: Group + traits::TranscriptReprTrait<G>> DotProductProofLog<G> {
 /*#[cfg(test)]
 mod tests {
   use super::*;
-  use ark_curve25519::EdwardsProjective as G1Projective;
-  use ark_std::test_rng;
-  use ark_std::UniformRand;
+  use rand::rngs::OsRng;
+
+  use halo2curves::bn256::{
+    G1Affine as Bn256Affine, G1, Fr as Scalar
+  };
+  use halo2curves::CurveExt;
+  use group::Curve;
+  use crate::traits::Group;
+  use ff::Field;
+
+  type G = <G1 as CurveExt>::AffineExt; 
 
   #[test]
   fn check_dotproductproof() {
-    check_dotproductproof_helper::<G1Projective>()
+    check_dotproductproof_helper()
   }
 
-  fn check_dotproductproof_helper<G: Group>() {
-    let mut prng = test_rng();
+  fn check_dotproductproof_helper() {
+    let mut csprng: OsRng = OsRng;
 
     let n = 1024;
 
     let gens_1 = MultiCommitGens::<G>::new(1, b"test-two");
-    let gens_1024 = MultiCommitGens::new(n, b"test-1024");
+    //let gens_1024 = MultiCommitGens::new(n, b"test-1024");
 
-    let mut x: Vec<G::Scalar> = Vec::new();
-    let mut a: Vec<G::Scalar> = Vec::new();
+    /*let mut x: Vec<<halo2curves::bn256::G1 as group::Group>::Scalar> = Vec::new();
+    let mut a: Vec<<halo2curves::bn256::G1 as group::Group>::Scalar> = Vec::new();
     for _ in 0..n {
-      x.push(G::Scalar::rand(&mut prng));
-      a.push(G::Scalar::rand(&mut prng));
+      x.push(<halo2curves::bn256::G1 as traits::Group>::Scalar::random(&mut csprng));
+      a.push(<halo2curves::bn256::G1 as traits::Group>::Scalar::random(&mut csprng));
     }
     let y = DotProductProof::<G>::compute_dotproduct(&x, &a);
-    let r_x = G::Scalar::rand(&mut prng);
-    let r_y = G::Scalar::rand(&mut prng);
+    let r_x = <halo2curves::bn256::G1 as traits::Group>::Scalar::random(&mut csprng);
+    let r_y = <halo2curves::bn256::G1 as traits::Group>::Scalar::random(&mut csprng);
 
-    let mut random_tape = RandomTape::new(b"proof");
-    let mut prover_transcript = Transcript::new(b"example");
-    let (proof, Cx, Cy) = DotProductProof::prove(
+    let mut prover_transcript = <halo2curves::bn256::G1 as traits::Group>::TE::new(b"example");
+    let Ok((proof, Cx, Cy)) = DotProductProof::prove(
       &gens_1,
       &gens_1024,
       &mut prover_transcript,
-      &mut random_tape,
       &x,
       &r_x,
       &a,
@@ -346,13 +352,13 @@ mod tests {
       &r_y,
     );
 
-    let mut verifier_transcript = Transcript::new(b"example");
+    let mut verifier_transcript = <halo2curves::bn256::G1 as traits::Group>::TE::new(b"example");
     assert!(proof
       .verify(&gens_1, &gens_1024, &mut verifier_transcript, &a, &Cx, &Cy)
-      .is_ok());
+      .is_ok());*/
   }
 
-  #[test]
+  /*#[test]
   fn check_dotproductproof_log() {
     check_dotproductproof_log_helper::<G1Projective>()
   }
@@ -387,5 +393,5 @@ mod tests {
     assert!(proof
       .verify(n, &gens, &mut verifier_transcript, &a, &Cx, &Cy)
       .is_ok());
-  }
+  }*/
 }*/

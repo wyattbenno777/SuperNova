@@ -4,6 +4,7 @@ use digest::{ExtendableOutput, Update};
 use sha3::Shake256;
 use std::io::Read;
 use crate::traits::Group;
+use crate::traits::TranscriptReprTrait;
 
 
 #[derive(Debug)]
@@ -13,7 +14,7 @@ pub struct MultiCommitGens<G: Group>  {
   pub h: G,
 }
 
-impl<G: Group + halo2curves::CurveExt<AffineExt = G>> MultiCommitGens<G> {
+impl<G: Group> MultiCommitGens<G> {
   pub fn new(n: usize, label: &[u8]) -> Self {
     let mut shake = Shake256::default();
     shake.update(label);
