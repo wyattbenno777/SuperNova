@@ -1,4 +1,5 @@
 //! This module is an adaptation of code from the Lasso crate.
+//! See NOTICE.md for more details
 use digest::{ExtendableOutput, Update};
 use sha3::Shake256;
 use std::io::Read;

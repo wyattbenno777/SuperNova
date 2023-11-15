@@ -1,3 +1,5 @@
+//! This module is an adaptation of code from the Lasso crate.
+//! See NOTICE.md for more details
 use super::bullet::BulletReductionProof;
 use super::commitments::{Commitments, MultiCommitGens};
 
@@ -9,10 +11,10 @@ use crate::{
   traits::{TranscriptEngineTrait, Group}
 };
 
-use halo2curves::CurveExt;
-use group::Curve;
+use crate::traits;
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct DotProductProof<G: Group> {
   delta: G,
   beta: G,
@@ -21,10 +23,7 @@ pub struct DotProductProof<G: Group> {
   z_beta: G::Scalar,
 }
 
-impl<G: Group> DotProductProof<G> {
-  fn protocol_name() -> &'static [u8] {
-    b"dot product proof"
-  }
+impl<G: Group + traits::TranscriptReprTrait<G>> DotProductProof<G> {
 
   pub fn compute_dotproduct(a: &[G::Scalar], b: &[G::Scalar]) -> G::Scalar {
     assert_eq!(a.len(), b.len());
@@ -41,18 +40,15 @@ impl<G: Group> DotProductProof<G> {
     a_vec: &[G::Scalar],
     y: &G::Scalar,
     blind_y: &G::Scalar,
-  ) -> (Self, G, G) {
+  ) -> Result<(Self, G, G), NovaError> {
 
-    transcript.absorb(b"dot product proof", DotProductProof::<G>::protocol_name());
-
-    let n = x_vec.len();
     assert_eq!(x_vec.len(), a_vec.len());
     assert_eq!(gens_n.n, a_vec.len());
     assert_eq!(gens_1.n, 1);
 
     let mut d_vec = Vec::new();
 
-    for x in x_vec {
+    for _x in x_vec {
       d_vec.push(transcript.squeeze(b"d_vec")?);
     }
 
@@ -64,7 +60,10 @@ impl<G: Group> DotProductProof<G> {
 
     let Cy = y.commit(blind_y, gens_1);
     transcript.absorb(b"Cy", &Cy);
-    transcript.absorb(b"a", a_vec);
+    
+    for sub_a in a_vec {
+      transcript.absorb(b"a", sub_a);
+    }
   
     let delta = Commitments::batch_commit(&d_vec, &r_delta, gens_n);
     transcript.absorb(b"delta", &delta);
@@ -83,7 +82,7 @@ impl<G: Group> DotProductProof<G> {
     let z_delta = c * blind_x + r_delta;
     let z_beta = c * blind_y + r_beta;
 
-    (
+    Ok((
       DotProductProof {
         delta,
         beta,
@@ -93,38 +92,36 @@ impl<G: Group> DotProductProof<G> {
       },
       Cx,
       Cy,
-    )
+    ))
   }
 
-  /*pub fn verify(
+  pub fn verify(
     &self,
     gens_1: &MultiCommitGens<G>,
     gens_n: &MultiCommitGens<G>,
-    transcript: &mut Transcript,
+    transcript: &mut G::TE,
     a: &[G::Scalar],
     Cx: &G,
     Cy: &G,
-  ) -> Result<(), ProofVerifyError> {
+  ) -> Result<(), NovaError> {
     if a.len() != gens_n.n {
-      return Err(ProofVerifyError::InvalidInputLength(gens_n.n, a.len()));
+      return Err(NovaError::InvalidInputLength);
     }
     if gens_1.n != 1 {
-      return Err(ProofVerifyError::InvalidInputLength(1, gens_1.n));
+      return Err(NovaError::InvalidInputLength);
     }
 
-    <Transcript as ProofTranscript<G>>::append_protocol_name(
-      transcript,
-      DotProductProof::<G>::protocol_name(),
-    );
+    transcript.absorb(b"Cy", Cx);
+    transcript.absorb(b"Cy", Cy);
 
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cx", Cx);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cy", Cy);
+    for sub_a in a {
+      transcript.absorb(b"a", sub_a);
+    }
 
-    <Transcript as ProofTranscript<G>>::append_scalars(transcript, b"a", a);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"delta", &self.delta);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"beta", &self.beta);
+    transcript.absorb(b"delta", &self.delta);
+    transcript.absorb(b"beta", &self.beta);
 
-    let c = <Transcript as ProofTranscript<G>>::challenge_scalar(transcript, b"c");
+    let c = transcript.squeeze(b"c")?;
 
     let mut result =
       *Cx * c + self.delta == Commitments::batch_commit(self.z.as_ref(), &self.z_delta, gens_n);
@@ -135,77 +132,81 @@ impl<G: Group> DotProductProof<G> {
     if result {
       Ok(())
     } else {
-      Err(ProofVerifyError::InternalError)
+      Err(NovaError::InternalTranscriptError)
     }
-  }*/
+  }
 }
 
-/*pub struct DotProductProofGens<G> {
+#[allow(unused)]
+pub struct DotProductProofGens<G: Group> {
   n: usize,
   pub gens_n: MultiCommitGens<G>,
   pub gens_1: MultiCommitGens<G>,
 }
 
-impl<G: Group> DotProductProofGens<G> {
+impl<G: Group + halo2curves::CurveExt<AffineExt = G>> DotProductProofGens<G> {
   pub fn new(n: usize, label: &[u8]) -> Self {
     let (gens_n, gens_1) = MultiCommitGens::new(n + 1, label).split_at(n);
     DotProductProofGens { n, gens_n, gens_1 }
   }
 }
 
-#[derive(Debug, CanonicalSerialize, CanonicalDeserialize)]
+
+#[derive(Debug)]
+#[allow(unused)]
 pub struct DotProductProofLog<G: Group> {
   bullet_reduction_proof: BulletReductionProof<G>,
   delta: G,
   beta: G,
   z1: G::Scalar,
   z2: G::Scalar,
-}*/
+}
 
-/*impl<G: Group> DotProductProofLog<G> {
-  fn protocol_name() -> &'static [u8] {
-    b"dot product proof (log)"
-  }
+impl<G: Group + traits::TranscriptReprTrait<G>> DotProductProofLog<G> {
 
-  #[tracing::instrument(skip_all, name = "DotProductProofLog.prove")]
   pub fn prove(
     gens: &DotProductProofGens<G>,
-    transcript: &mut Transcript,
-    random_tape: &mut RandomTape<G>,
+    transcript: &mut G::TE,
     x_vec: &[G::Scalar],
     blind_x: &G::Scalar,
     a_vec: &[G::Scalar],
     y: &G::Scalar,
     blind_y: &G::Scalar,
-  ) -> (Self, G, G) {
-    <Transcript as ProofTranscript<G>>::append_protocol_name(
-      transcript,
-      DotProductProofLog::<G>::protocol_name(),
-    );
+  ) -> Result<(Self, G, G), NovaError> {
 
     let n = x_vec.len();
     assert_eq!(x_vec.len(), a_vec.len());
     assert_eq!(gens.n, n);
 
     // produce randomness for generating a proof
-    let d = random_tape.random_scalar(b"d");
-    let r_delta = random_tape.random_scalar(b"r_delta");
-    let r_beta = random_tape.random_scalar(b"r_delta");
+    let d = transcript.squeeze(b"d")?;
+    let r_delta = transcript.squeeze(b"r_delta")?;
+    let r_beta = transcript.squeeze(b"r_beta")?;
     let blinds_vec = {
-      let v1 = random_tape.random_vector(b"blinds_vec_1", 2 * n.log_2());
-      let v2 = random_tape.random_vector(b"blinds_vec_2", 2 * n.log_2());
+      let mut v1 = Vec::new();
+      for _i in 0..(2 * n.log_2()) {       
+        v1.push(transcript.squeeze(b"blinds_vec_1")?);
+      }
+
+      let mut v2 = Vec::new();
+      for _i in 0..(2 * n.log_2()) {
+        v2.push(transcript.squeeze(b"blinds_vec21")?);
+      }
+
       (0..v1.len())
         .map(|i| (v1[i], v2[i]))
         .collect::<Vec<(G::Scalar, G::Scalar)>>()
     };
 
     let Cx = Commitments::batch_commit(x_vec, blind_x, &gens.gens_n);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cx", &Cx);
+    transcript.absorb(b"Cx", &Cx);
 
     let Cy = y.commit(blind_y, &gens.gens_1);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cy", &Cy);
+    transcript.absorb(b"Cy", &Cy);
 
-    <Transcript as ProofTranscript<G>>::append_scalars(transcript, b"a", a_vec);
+    for sub_a in a_vec {
+      transcript.absorb(b"a", sub_a);
+    }
 
     let blind_Gamma = *blind_x + *blind_y;
     let (bullet_reduction_proof, _Gamma_hat, x_hat, a_hat, g_hat, rhat_Gamma) =
@@ -229,17 +230,18 @@ pub struct DotProductProofLog<G: Group> {
       };
       d.commit(&r_delta, &gens_hat)
     };
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"delta", &delta);
+
+    transcript.absorb(b"delta", &delta);
 
     let beta = d.commit(&r_beta, &gens.gens_1);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"beta", &beta);
+    transcript.absorb(b"beta", &beta);
 
-    let c = <Transcript as ProofTranscript<G>>::challenge_scalar(transcript, b"c");
+    let c = transcript.squeeze(b"c")?;
 
     let z1 = d + c * y_hat;
     let z2 = a_hat * (c * rhat_Gamma + r_beta) + r_delta;
 
-    (
+    Ok((
       DotProductProofLog {
         bullet_reduction_proof,
         delta,
@@ -249,28 +251,28 @@ pub struct DotProductProofLog<G: Group> {
       },
       Cx,
       Cy,
-    )
-  }*/
+    ))
+  }
 
-  /*pub fn verify(
+  pub fn verify(
     &self,
     n: usize,
     gens: &DotProductProofGens<G>,
-    transcript: &mut Transcript,
+    transcript: &mut G::TE,
     a: &[G::Scalar],
     Cx: &G,
     Cy: &G,
-  ) -> Result<(), ProofVerifyError> {
+  ) -> Result<(), NovaError> {
     assert_eq!(gens.n, n);
     assert_eq!(a.len(), n);
 
-    <Transcript as ProofTranscript<G>>::append_protocol_name(
-      transcript,
-      DotProductProofLog::<G>::protocol_name(),
-    );
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cx", Cx);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"Cy", Cy);
-    <Transcript as ProofTranscript<G>>::append_scalars(transcript, b"a", a);
+    transcript.absorb(b"Cy", Cx);
+    transcript.absorb(b"Cy", Cy);
+
+    for sub_a in a {
+      transcript.absorb(b"a", sub_a);
+    }
+
 
     let Gamma = *Cx + *Cy;
 
@@ -279,10 +281,10 @@ pub struct DotProductProofLog<G: Group> {
         .bullet_reduction_proof
         .verify(n, a, transcript, &Gamma, &gens.gens_n.G)?;
 
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"delta", &self.delta);
-    <Transcript as ProofTranscript<G>>::append_point(transcript, b"beta", &self.beta);
+    transcript.absorb(b"delta", &self.delta);
+    transcript.absorb(b"beta", &self.beta);
 
-    let c = <Transcript as ProofTranscript<G>>::challenge_scalar(transcript, b"c");
+    let c = transcript.squeeze(b"c")?;
 
     let c_s = &c;
     let beta_s = self.beta;
@@ -296,9 +298,9 @@ pub struct DotProductProofLog<G: Group> {
 
     (lhs == rhs)
       .then_some(())
-      .ok_or(ProofVerifyError::InternalError)
+      .ok_or(NovaError::InternalTranscriptError)
   }
-}*/
+}
 
 /*#[cfg(test)]
 mod tests {

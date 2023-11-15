@@ -4,8 +4,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
 
-use bellpepper_core::{ConstraintSystem};
-
 use crate::{
   errors::NovaError,
   spartan::{
@@ -36,8 +34,7 @@ impl<G: Group> BulletReductionProof<G>{
   ///
   /// The lengths of the vectors must all be the same, and must all be
   /// either 0 or a power of 2.
-  pub fn prove<CS: ConstraintSystem<G::Scalar>>(
-    _cs: &mut CS,
+  pub fn prove(
     transcript: &mut G::TE,
     Q: &G,
     G_vec: &[G],

@@ -2,4 +2,4 @@
 
 pub mod commitments;
 pub mod bullet;
-//pub mod dot_product;
+pub mod dot_product;
