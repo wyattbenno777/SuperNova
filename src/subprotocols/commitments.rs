@@ -1,11 +1,7 @@
 //! This module is an adaptation of code from the Lasso crate.
 //! See NOTICE.md for more details
-use digest::{ExtendableOutput, Update};
-use sha3::Shake256;
-use std::io::Read;
-use crate::traits::Group;
-use crate::traits::TranscriptReprTrait;
-
+use crate::traits::{TranscriptEngineTrait, Group};
+//use group::Group as G;
 
 #[derive(Debug)]
 pub struct MultiCommitGens<G: Group>  {
@@ -15,17 +11,25 @@ pub struct MultiCommitGens<G: Group>  {
 }
 
 impl<G: Group> MultiCommitGens<G> {
-  pub fn new(n: usize, label: &[u8]) -> Self {
-    let mut shake = Shake256::default();
-    shake.update(label);
-    let mut reader = shake.finalize_xof();
+  fn random(
+    transcript: &mut G::TE,
+  ) -> G {
+    let label = b"Inside rand";
+    let bases = G::from_label(label, 32);
 
-    let mut gens = Vec::new();
-    for _ in 0..n {
-      let mut uniform_bytes = [0u8; 32];
-      reader.read_exact(&mut uniform_bytes).unwrap();
-      let hash = G::hash_to_curve("from_uniform_bytes");
-      gens.push(hash(&uniform_bytes).to_affine());
+    let mut scalars = Vec::with_capacity(32);
+    for _i in 0..32 {
+      scalars.push(transcript.squeeze(b"rand").unwrap());
+    }
+    G::vartime_multiscalar_mul(&scalars, bases.as_slice())
+  }
+
+  pub fn new(n: usize, _label: &[u8], transcript: &mut G::TE) -> Self {
+
+    //transcript.absorb(b"label", &label);
+    let mut gens: Vec<G> = Vec::new();
+    for _ in 0..n + 1 {
+      gens.push(Self::random(transcript));
     }
 
     MultiCommitGens {
